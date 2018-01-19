@@ -115,21 +115,9 @@ Requires:       %{name}-libs = %{version}-%{release}
 Recommends:     diffutils
 Requires:       util-linux
 Recommends:     libxkbcommon%{?_isa}
-Provides:       /bin/systemctl
-Provides:       /sbin/shutdown
-Provides:       syslog
-Provides:       systemd-units = %{version}-%{release}
-Obsoletes:      system-setup-keyboard < 0.9
-Provides:       system-setup-keyboard = 0.9
-# systemd-sysv-convert was removed in f20: https://fedorahosted.org/fpc/ticket/308
-Obsoletes:      systemd-sysv < 206
 # self-obsoletes so that dnf will install new subpackages on upgrade (#1260394)
 Obsoletes:      %{name} < 229-5
-Provides:       systemd-sysv = 206
 Conflicts:      initscripts < 9.56.1
-%if 0%{?fedora}
-Conflicts:      fedora-release < 23-0.12
-%endif
 
 %description
 systemd is a system and service manager that runs as PID 1 and starts
