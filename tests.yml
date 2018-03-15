@@ -1,0 +1,40 @@
+---
+# Tests that run in classic context
+- hosts: localhost
+  roles:
+  - role: standard-test-beakerlib
+    tags:
+    - classic
+    repositories:
+    - repo: "https://github.com/systemd/systemd-fedora-ci"
+      dest: "tests"
+    tests:
+    - tests/basic
+    - tests/upstream
+    - tests/hostnamectl
+    - tests/killmode
+    - tests/rlimits
+    - tests/unit
+    - tests/activate
+    - tests/modules-load
+    - tests/timers
+    - tests/resolve
+    - tests/socket
+    - tests/link
+    - tests/issue-1981
+    - tests/issue-2467
+    - tests/issue-3166
+    - tests/network
+    - tests/networkd-wait-online
+    required_packages:
+    - ethtool
+    - systemd-tests
+    - findutils
+    - kernel-modules-extra
+    - lsof
+    - systemd
+    - nc
+    - python
+    - busybox
+    - python3
+    - python3-psutil
