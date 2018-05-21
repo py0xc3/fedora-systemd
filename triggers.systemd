@@ -104,6 +104,9 @@ fi
 %transfiletriggerin -- /usr/lib/binfmt.d
 # This script will automatically apply binfmt rules if files have been
 # installed or updated in /usr/lib/binfmt.d.
+# Note:
+#  systemd-binfmt might fail as binfmt_misc kernel module is not loaded
+#  during install
 if test -d /run/systemd/system; then
-  /usr/lib/systemd/systemd-binfmt
+  /usr/lib/systemd/systemd-binfmt || :
 fi
