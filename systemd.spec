@@ -688,7 +688,7 @@ fi
 %files tests -f .file-list-tests
 
 %changelog
-* Sun Nov 18 2018 Alejandro Domínguez Muñoz <adomu@net-c.com> - 239-9.git9f3aed1
+* Sun Nov 18 2018 Alejandro Domínguez Muñoz <adomu@net-c.com> - 239-10.git9f3aed1
 - Remove link creation for rsyslog.service
 
 * Thu Nov  8 2018 Adam Williamson <awilliam@redhat.com> - 239-9.git9f3aed1
