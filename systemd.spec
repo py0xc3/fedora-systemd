@@ -532,7 +532,7 @@ fi
 function mod_nss() {
     if [ -f "$1" ] ; then
         # sed-fu to add myhostanme to hosts line
-        grep -v -E -q '^hosts:.* myhostname' "$1" &&
+        grep -E -q '^hosts:.* myhostname' "$1" ||
         sed -i.bak -e '
                 /^hosts:/ !b
                 /\<myhostname\>/ b
