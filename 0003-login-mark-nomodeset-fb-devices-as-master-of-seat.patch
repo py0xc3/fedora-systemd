@@ -1,0 +1,32 @@
+From 0c40a431962e8510cf6966e00991c0f26370457d Mon Sep 17 00:00:00 2001
+From: Adam Jackson <ajax@redhat.com>
+Date: Tue, 12 Mar 2019 20:22:13 +0100
+Subject: [PATCH] login: mark nomodeset fb devices as master-of-seat
+
+When 'nomodeset' is specified, there's no DRM driver to take over from
+efifb. This means no device will be marked as a seat master, so gdm will
+never find a sufficiently active seat to start on.
+
+I'm not aware of an especially good way to detect this through a proper
+kernel API, so check for the word 'nomodeset' on the command line and
+allow fbdev devices to be seat masters if found.
+
+For https://bugzilla.redhat.com/show_bug.cgi?id=1683197.
+---
+ src/login/71-seat.rules.in | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/login/71-seat.rules.in b/src/login/71-seat.rules.in
+--- a/src/login/71-seat.rules.in
++++ b/src/login/71-seat.rules.in
+@@ -13,6 +13,10 @@
+ SUBSYSTEM=="sound", KERNEL=="card*", TAG+="seat"
+ SUBSYSTEM=="input", KERNEL=="input*", TAG+="seat"
+ SUBSYSTEM=="graphics", KERNEL=="fb[0-9]*", TAG+="seat"
++
++# Allow efifb / uvesafb to be a master if KMS is disabled
++SUBSYSTEM=="graphics", KERNEL=="fb[0-9]", IMPORT{cmdline}="nomodeset", TAG+="master-of-seat"
++
+ SUBSYSTEM=="drm", KERNEL=="card[0-9]*", TAG+="seat", TAG+="master-of-seat"
+ SUBSYSTEM=="usb", ATTR{bDeviceClass}=="09", TAG+="seat"
+
