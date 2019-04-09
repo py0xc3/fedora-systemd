@@ -1,4 +1,4 @@
-%global commit cbf14c9500d5e6820fd7d96166ca0bf75c6850df
+%global commit 50497b1fda6935a8af16147ced09179e993a5797
 %{?commit:%global shortcommit %(c=%{commit}; echo ${c:0:7})}
 
 %global stable 1
@@ -15,7 +15,7 @@
 Name:           systemd
 Url:            https://www.freedesktop.org/wiki/Software/systemd
 Version:        241
-Release:        4%{?commit:.git%{shortcommit}}%{?dist}
+Release:        5%{?commit:.git%{shortcommit}}%{?dist}
 # For a breakdown of the licensing, see README
 License:        LGPLv2+ and MIT and GPLv2+
 Summary:        System and Service Manager
@@ -698,6 +698,9 @@ fi
 %files tests -f .file-list-tests
 
 %changelog
+* Tue Apr 9 2019 David Michael <dm0@redhat.com> - 241-5.git50497b1
+- Backport stable patch for fixing escaped preset parsing regression.
+
 * Fri Mar 29 2019 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 241-4.gitcbf14c9
 - Backport various patches from the v241..v242 range:
   kernel-install will not create the boot loader entry automatically (#1648907),
