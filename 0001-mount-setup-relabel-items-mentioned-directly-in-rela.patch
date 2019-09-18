@@ -1,0 +1,30 @@
+From 71de68476c1897b8624538ce32218891251fa5f6 Mon Sep 17 00:00:00 2001
+From: Benjamin Gilbert <bgilbert@redhat.com>
+Date: Tue, 10 Sep 2019 23:23:59 -0400
+Subject: [PATCH] mount-setup: relabel items mentioned directly in
+ relabel-extra.d
+
+relabel_extra() relabels the descendants of directories listed in
+relabel-extra.d, but doesn't relabel the files or directories
+explicitly named there.  This makes it impossible to use
+relabel-extra.d to relabel the root of a filesystem.  Fix by
+relabeling the named items too.
+---
+ src/core/mount-setup.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/core/mount-setup.c b/src/core/mount-setup.c
+index ea7b0a80cb..fc6c5f6bef 100644
+--- a/src/core/mount-setup.c
++++ b/src/core/mount-setup.c
+@@ -486,6 +486,7 @@ static int relabel_extra(void) {
+                         }
+ 
+                         log_debug("Relabelling additional file/directory '%s'.", line);
++                        (void) label_fix(line, 0);
+                         (void) nftw(line, nftw_cb, 64, FTW_MOUNT|FTW_PHYS|FTW_ACTIONRETVAL);
+                         c++;
+                 }
+-- 
+2.20.1
+

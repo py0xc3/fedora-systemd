@@ -15,7 +15,7 @@
 Name:           systemd
 Url:            https://www.freedesktop.org/wiki/Software/systemd
 Version:        243
-Release:        1%{?commit:.git%{shortcommit}}%{?dist}
+Release:        2%{?commit:.git%{shortcommit}}%{?dist}
 # For a breakdown of the licensing, see README
 License:        LGPLv2+ and MIT and GPLv2+
 Summary:        System and Service Manager
@@ -56,6 +56,9 @@ GIT_DIR=../../src/systemd/.git git diffab -M v233..master@{2017-06-15} -- hwdb/[
 Patch0001:      https://github.com/keszybz/systemd/commit/464a73411c13596a130a7a8f0ac00ca728e5f69e.patch
 
 Patch0002:      0002-Revert-units-set-NoNewPrivileges-for-all-long-runnin.patch
+
+# https://github.com/systemd/systemd/pull/13524
+Patch0003:      0001-mount-setup-relabel-items-mentioned-directly-in-rela.patch
 
 Patch0998:      0998-resolved-create-etc-resolv.conf-symlink-at-runtime.patch
 
@@ -697,6 +700,9 @@ fi
 %files tests -f .file-list-tests
 
 %changelog
+* Wed Sep 18 2019 Dusty Mabe <dusty@dustymabe.com> - 243-2
+- Backport PR #13524 to solve relabel-extra.d problem
+
 * Tue Sep  3 2019 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 243-1
 - Update to latest release
 - Emission of Session property-changed notifications from logind is fixed
