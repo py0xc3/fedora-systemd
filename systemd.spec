@@ -15,7 +15,7 @@
 Name:           systemd
 Url:            https://www.freedesktop.org/wiki/Software/systemd
 Version:        241
-Release:        12%{?commit:.git%{shortcommit}}%{?dist}
+Release:        13%{?commit:.git%{shortcommit}}%{?dist}
 # For a breakdown of the licensing, see README
 License:        LGPLv2+ and MIT and GPLv2+
 Summary:        System and Service Manager
@@ -57,6 +57,9 @@ GIT_DIR=../../src/systemd/.git git diffab -M v233..master@{2017-06-15} -- hwdb/[
 Patch0001:      0001-meson-stop-creating-enablement-symlinks-in-etc-durin.patch
 Patch0002:      0002-Revert-units-set-NoNewPrivileges-for-all-long-runnin.patch
 Patch0003:      https://github.com/systemd/systemd/pull/13378/commits/3b69aff5651721de3f69815dcbcbe85ab94e94ce.patch
+
+# https://github.com/systemd/systemd/pull/13524
+Patch0004:      0001-mount-setup-relabel-items-mentioned-directly-in-rela.patch
 
 Patch0998:      0998-resolved-create-etc-resolv.conf-symlink-at-runtime.patch
 
@@ -708,6 +711,9 @@ fi
 %files tests -f .file-list-tests
 
 %changelog
+* Wed Sep 18 2019 Dusty Mabe <dusty@dustymabe.com> - 241-13.git1e19bcd
+- Backport PR #13524 to solve relabel-extra.d problem
+
 * Tue Sep  3 2019 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 241-12.git1e19bcd
 - hwdb entries for keyboards are updated to the latest version (#1725717)
 
