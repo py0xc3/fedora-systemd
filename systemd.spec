@@ -70,6 +70,11 @@ GIT_DIR=../../src/systemd/.git git diffab -M v233..master@{2017-06-15} -- hwdb/[
 # https://bugzilla.redhat.com/show_bug.cgi?id=1738828
 Patch0001:      use-bfq-scheduler.patch
 
+# FTBFS with glibc 2.31.9000-7.fc33 / linux >= 5.6
+# IPPROTO_MAX > UINT8_MAX
+# https://github.com/systemd/systemd/pull/15452
+Patch0002:      https://github.com/systemd/systemd/pull/15452.patch#/fix-static-assertion-failure-with-recent-glibc.patch
+
 Patch0998:      0998-resolved-create-etc-resolv.conf-symlink-at-runtime.patch
 
 # https://bugzilla.redhat.com/show_bug.cgi?id=1803293
@@ -772,6 +777,7 @@ fi
 %changelog
 * Thu Apr 16 2020 Björn Esser <besser82@fedoraproject.org> - 245.4-2
 - Add bootstrap option to break circular deps on cryptsetup
+- Add patch to fix static assertion failure with recent glibc
 
 * Wed Apr  1 2020 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 245.4-1
 - Update to latest stable version (#1814454)
