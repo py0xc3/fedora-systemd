@@ -20,7 +20,7 @@
 Name:           systemd
 Url:            https://www.freedesktop.org/wiki/Software/systemd
 Version:        246.4
-Release:        1%{?dist}
+Release:        2%{?dist}
 # For a breakdown of the licensing, see README
 License:        LGPLv2+ and MIT and GPLv2+
 Summary:        System and Service Manager
@@ -150,6 +150,9 @@ Requires:       dbus >= 1.9.18
 Requires:       %{name}-pam = %{version}-%{release}
 Requires:       %{name}-rpm-macros = %{version}-%{release}
 Requires:       %{name}-libs = %{version}-%{release}
+Requires:       %{name}-shared = %{version}-%{release}
+Requires:       %{name}-sysusers = %{version}-%{release}
+Requires:       %{name}-tmpfiles = %{version}-%{release}
 Recommends:     diffutils
 Requires:       util-linux
 Recommends:     libxkbcommon%{?_isa}
@@ -306,6 +309,44 @@ and to write journal files from serialized journal contents.
 
 This package contains systemd-journal-gatewayd,
 systemd-journal-remote, and systemd-journal-upload.
+
+%package shared
+Summary:       Shared library object for systemd
+License:       LGPLv2+
+
+%description shared
+This package contains libsystemd-shared-%(c=%{version}; echo ${c:0:2}).so
+and owns the %{_prefix}/lib/systemd directory.
+
+%package sysusers
+Summary:       Declarative allocation of system users and groups
+Requires:      %{name}-shared%{?_isa} = %{version}-%{release}
+License:       LGPLv2+
+
+%description sysusers
+Systemd-sysusers uses the files from sysusers.d directory to create system
+users and groups and to add users to groups, at package installation or boot
+time.
+
+This tool may be used to allocate system users and groups only, it is not
+useful for creating non-system (i.e. regular, "human") users and groups,
+as it accesses /etc/passwd and /etc/group directly, bypassing any more 
+complex user databases, for example any database involving NIS or LDAP.
+
+%package tmpfiles
+Summary:       Creates, deletes and cleans up volatile and temporary files and directories
+Requires:      %{name}-shared%{?_isa} = %{version}-%{release}
+License:       LGPLv2+
+
+%description tmpfiles
+Systemd-tmpfiles uses the files from tmpfiles.d to create volatile files
+and directories during boot and to do periodic cleanup afterwards.
+
+tmpfiles.d configuration files provide a generic mechanism to define the
+creation of regular files, directories, pipes, and device nodes, adjustments
+to their access mode, ownership, attributes, quota assignments, and contents,
+and finally their time-based removal. It is mostly commonly used for volatile
+and temporary files and directories.
 
 %package tests
 Summary:       Internal unit tests for systemd
@@ -801,9 +842,20 @@ fi
 
 %files journal-remote -f .file-list-remote
 
+%files shared -f .file-list-shared
+
+%files sysusers -f .file-list-sysusers
+
+%files tmpfiles -f .file-list-tmpfiles
+
 %files tests -f .file-list-tests
 
 %changelog
+* Mon Sep 7 2020 Christian Glombek <lorbus@fedoraproject.org> - 246.4-2
+- Create shared, sysusers and tmpfiles sub-packages:
+  Splits libsystemd-shared object, systemd-sysusers and systemd-tmpfiles
+  into their own subpackages
+
 * Wed Sep  2 2020 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 246.4-1
 - Update to latest stable version: a rework of how the unit cache mtime works
   (hopefully #1872068, #1871327, #1867930), plus various fixes to
