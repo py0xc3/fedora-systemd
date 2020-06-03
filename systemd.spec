@@ -20,7 +20,7 @@
 Name:           systemd
 Url:            https://www.freedesktop.org/wiki/Software/systemd
 Version:        246.5
-Release:        1%{?dist}
+Release:        2%{?dist}
 # For a breakdown of the licensing, see README
 License:        LGPLv2+ and MIT and GPLv2+
 Summary:        System and Service Manager
@@ -318,6 +318,24 @@ License:       LGPLv2+
 "Installed tests" that are usually run as part of the build system.
 They can be useful to test systemd internals.
 
+%package standalone-tmpfiles
+Summary:       Standalone tmpfiles binary for use in non-systemd systems
+RemovePathPostfixes: .standalone
+
+%description standalone-tmpfiles
+Standalone tmpfiles binary with no dependencies on the systemd-shared library
+or other libraries from systemd-libs. This package conflicts with the main
+systemd package and is meant for use in non-systemd systems.
+
+%package standalone-sysusers
+Summary:       Standalone sysusers binary for use in non-systemd systems
+RemovePathPostfixes: .standalone
+
+%description standalone-sysusers
+Standalone sysusers binary with no dependencies on the systemd-shared library
+or other libraries from systemd-libs. This package conflicts with the main
+systemd package and is meant for use in non-systemd systems.
+
 %prep
 %autosetup -n %{?commit:%{name}%{?stable:-stable}-%{commit}}%{!?commit:%{name}%{?stable:-stable}-%{github_version}} -p1
 
@@ -372,6 +390,7 @@ CONFIGURE_OPTS=(
         -Dtpm=true
         -Dhwdb=true
         -Dsysusers=true
+        -Dstandalone-binaries=true
         -Ddefault-kill-user-processes=false
         -Dtests=unsafe
         -Dinstall-tests=true
@@ -805,7 +824,15 @@ fi
 
 %files tests -f .file-list-tests
 
+%files standalone-tmpfiles -f .file-list-standalone-tmpfiles
+
+%files standalone-sysusers -f .file-list-standalone-sysusers
+
 %changelog
+* Wed Sep 16 2020 Filipe Brandenburger <filbranden@gmail.com> - 246.5-2
+- Build a package with standalone binaries for non-systemd systems.
+  For now, only systemd-sysusers is included.
+
 * Sun Sep 13 2020 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 246.5-1
 - Update to latest stable release (a bunch of small network-related
   fixes in systemd-networkd and socket handling, documentation updates,

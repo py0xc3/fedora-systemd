@@ -23,6 +23,8 @@ o_devel = open('.file-list-devel', 'w')
 o_container = open('.file-list-container', 'w')
 o_remote = open('.file-list-remote', 'w')
 o_tests = open('.file-list-tests', 'w')
+o_standalone_tmpfiles = open('.file-list-standalone-tmpfiles', 'w')
+o_standalone_sysusers = open('.file-list-standalone-sysusers', 'w')
 o_rest = open('.file-list-rest', 'w')
 for file in files(buildroot):
     n = file.path[1:]
@@ -109,6 +111,13 @@ for file in files(buildroot):
                        /modprobe.d
     ''', n, re.X):
         o = o_udev
+    elif n.endswith('.standalone'):
+        if 'tmpfiles' in n:
+            o = o_standalone_tmpfiles
+        elif 'sysusers' in n:
+            o = o_standalone_sysusers
+        else:
+            assert False, 'Found .standalone not belonging to known packages'
     else:
         o = o_rest
 
