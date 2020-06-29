@@ -1,0 +1,25 @@
+From 1f5174eb7fcd8f58355ecc6928f0e42c4c3b739c Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Mon, 29 Jun 2020 15:55:41 +0200
+Subject: [PATCH] test-repart: allow the test to pass on non-amd64
+ architectures
+
+We specified type=root and expected to always get root-x86-64, which obviously
+cannot work.
+---
+ src/partition/test-repart.sh | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/partition/test-repart.sh b/src/partition/test-repart.sh
+index 897f11411a..afdc4c13cd 100755
+--- a/src/partition/test-repart.sh
++++ b/src/partition/test-repart.sh
+@@ -25,7 +25,7 @@ EOF
+ 
+ cat >$D/definitions/root.conf <<EOF
+ [Partition]
+-Type=root
++Type=root-x86-64
+ EOF
+ 
+ ln -s root.conf $D/definitions/root2.conf
