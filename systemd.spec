@@ -71,6 +71,7 @@ GIT_DIR=../../src/systemd/.git git diffab -M v233..master@{2017-06-15} -- hwdb/[
 Patch0001:      use-bfq-scheduler.patch
 
 Patch0002:      0001-test-repart-allow-the-test-to-pass-on-non-amd64-arch.patch
+Patch0003:      0001-Fix-build-with-httpd-0.9.71.patch
 
 Patch0998:      0998-resolved-create-etc-resolv.conf-symlink-at-runtime.patch
 
