@@ -20,7 +20,7 @@
 Name:           systemd
 Url:            https://www.freedesktop.org/wiki/Software/systemd
 Version:        246.3
-Release:        1%{?dist}
+Release:        1^r1%{?dist}
 # For a breakdown of the licensing, see README
 License:        LGPLv2+ and MIT and GPLv2+
 Summary:        System and Service Manager
@@ -75,6 +75,8 @@ Patch0003:      0002-test-path-do-not-fail-the-test-if-we-fail-to-start-s.patch
 
 Patch0004:      0001-test-acl-util-output-more-debug-info.patch
 Patch0005:      0001-Do-not-assert-in-test_add_acls_for_user.patch
+
+Patch0006:      0001-Revert-core-refresh-unit-cache-when-building-a-trans.patch
 
 %ifarch %{ix86} x86_64 aarch64
 %global have_gnu_efi 1
@@ -792,6 +794,9 @@ fi
 %files tests -f .file-list-tests
 
 %changelog
+* Wed Aug 26 2020 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 246.3-1^r1
+- Revert one suspicious patch (#1872068, #1867930)
+
 * Wed Aug 26 2020 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 246.3-1
 - Update to bugfix version (some networkd fixes, minor documentation
   fixes, relax handling of various error conditions, other fixlets for

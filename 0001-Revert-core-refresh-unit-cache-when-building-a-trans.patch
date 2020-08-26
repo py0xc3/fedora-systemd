@@ -1,0 +1,137 @@
+From 4267a6f0a8b83eebdf7e23ac38c895a32ac55f12 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Wed, 26 Aug 2020 14:52:58 +0200
+Subject: [PATCH] Revert "core: refresh unit cache when building a transaction
+ if UNIT_NOT_FOUND"
+
+This reverts commit cda667722c2218cf1a0185284d2a87f8a25f1b2d.
+
+We have a suspicion that it causes problems during boot:
+https://bugzilla.redhat.com/show_bug.cgi?id=1872068,
+https://bugzilla.redhat.com/show_bug.cgi?id=1867930.
+But this is mostly based on lack of better suspects, not any clear explanation
+what goes wrong with this patch.
+---
+ src/core/manager.c         | 18 +++++-------------
+ src/core/manager.h         |  1 -
+ src/core/transaction.c     | 19 -------------------
+ test/units/testsuite-48.sh | 27 ---------------------------
+ 4 files changed, 5 insertions(+), 60 deletions(-)
+
+diff --git a/src/core/manager.c b/src/core/manager.c
+index 49bf5419d8..d2b8c4131f 100644
+--- a/src/core/manager.c
++++ b/src/core/manager.c
+@@ -1947,19 +1947,11 @@ unsigned manager_dispatch_load_queue(Manager *m) {
+         return n;
+ }
+ 
+-bool manager_unit_file_maybe_loadable_from_cache(Unit *u) {
+-        assert(u);
++static bool manager_unit_cache_needs_refresh(Manager *m, Unit *u) {
++        assert(m);
+ 
+-        if (u->load_state != UNIT_NOT_FOUND)
+-                return false;
+-
+-        if (u->manager->unit_cache_mtime == 0)
+-                return false;
+-
+-        if (u->manager->unit_cache_mtime > u->fragment_loadtime)
+-                return true;
+-
+-        return !lookup_paths_mtime_good(&u->manager->lookup_paths, u->manager->unit_cache_mtime);
++        return m->unit_cache_mtime > 0 &&
++                (m->unit_cache_mtime > u->fragment_loadtime || !lookup_paths_mtime_good(&m->lookup_paths, m->unit_cache_mtime));
+ }
+ 
+ int manager_load_unit_prepare(
+@@ -2011,7 +2003,7 @@ int manager_load_unit_prepare(
+                  * we need to try again - even if the cache is current, it might have been
+                  * updated in a different context before we had a chance to retry loading
+                  * this particular unit. */
+-                if (manager_unit_file_maybe_loadable_from_cache(ret))
++                if (ret->load_state == UNIT_NOT_FOUND && manager_unit_cache_needs_refresh(m, ret))
+                         ret->load_state = UNIT_STUB;
+                 else {
+                         *_ret = ret;
+diff --git a/src/core/manager.h b/src/core/manager.h
+index d507dc1f3b..fd99759beb 100644
+--- a/src/core/manager.h
++++ b/src/core/manager.h
+@@ -464,7 +464,6 @@ Unit *manager_get_unit(Manager *m, const char *name);
+ 
+ int manager_get_job_from_dbus_path(Manager *m, const char *s, Job **_j);
+ 
+-bool manager_unit_file_maybe_loadable_from_cache(Unit *u);
+ int manager_load_unit_prepare(Manager *m, const char *name, const char *path, sd_bus_error *e, Unit **_ret);
+ int manager_load_unit(Manager *m, const char *name, const char *path, sd_bus_error *e, Unit **_ret);
+ int manager_load_startable_unit_or_warn(Manager *m, const char *name, const char *path, Unit **ret);
+diff --git a/src/core/transaction.c b/src/core/transaction.c
+index 958243bc94..ef6470656c 100644
+--- a/src/core/transaction.c
++++ b/src/core/transaction.c
+@@ -954,25 +954,6 @@ int transaction_add_job_and_dependencies(
+ 
+         if (type != JOB_STOP) {
+                 r = bus_unit_validate_load_state(unit, e);
+-                /* The time-based cache allows to start new units without daemon-reload,
+-                 * but if they are already referenced (because of dependencies or ordering)
+-                 * then we have to force a load of the fragment. As an optimization, check
+-                 * first if anything in the usual paths was modified since the last time
+-                 * the cache was loaded. Also check if the last time an attempt to load the
+-                 * unit was made was before the most recent cache refresh, so that we know
+-                 * we need to try again - even if the cache is current, it might have been
+-                 * updated in a different context before we had a chance to retry loading
+-                 * this particular unit.
+-                 * Given building up the transaction is a synchronous operation, attempt
+-                 * to load the unit immediately. */
+-                if (r < 0 && manager_unit_file_maybe_loadable_from_cache(unit)) {
+-                        sd_bus_error_free(e);
+-                        unit->load_state = UNIT_STUB;
+-                        r = unit_load(unit);
+-                        if (r < 0 || unit->load_state == UNIT_STUB)
+-                                unit->load_state = UNIT_NOT_FOUND;
+-                        r = bus_unit_validate_load_state(unit, e);
+-                }
+                 if (r < 0)
+                         return r;
+         }
+diff --git a/test/units/testsuite-48.sh b/test/units/testsuite-48.sh
+index 03231e71b1..93e5e98e42 100755
+--- a/test/units/testsuite-48.sh
++++ b/test/units/testsuite-48.sh
+@@ -53,33 +53,6 @@ systemctl start testservice-48.service
+ 
+ systemctl is-active testservice-48.service
+ 
+-# Stop and remove, and try again to exercise the transaction setup code path by
+-# having the target pull in the unloaded but available unit
+-systemctl stop testservice-48.service testservice-48.target
+-rm -f /run/systemd/system/testservice-48.service /run/systemd/system/testservice-48.target
+-systemctl daemon-reload
+-
+-sleep 3.1
+-
+-cat > /run/systemd/system/testservice-48.target <<EOF
+-[Unit]
+-Conflicts=shutdown.target
+-Wants=testservice-48.service
+-EOF
+-
+-systemctl daemon-reload
+-
+-systemctl start testservice-48.target
+-
+-cat > /run/systemd/system/testservice-48.service <<EOF
+-[Service]
+-ExecStart=/bin/sleep infinity
+-EOF
+-
+-systemctl restart testservice-48.target
+-
+-systemctl is-active testservice-48.service
+-
+ echo OK > /testok
+ 
+ exit 0
