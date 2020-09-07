@@ -24,6 +24,7 @@ o_container = open('.file-list-container', 'w')
 o_remote = open('.file-list-remote', 'w')
 o_tests = open('.file-list-tests', 'w')
 o_shared = open('.file-list-shared', 'w')
+o_networkd = open('.file-list-networkd', 'w')
 o_sysusers = open('.file-list-sysusers', 'w')
 o_tmpfiles = open('.file-list-tmpfiles', 'w')
 o_rest = open('.file-list-rest', 'w')
@@ -56,6 +57,8 @@ for file in files(buildroot):
         o = o_rpm_macros
     elif re.search(r'/libsystemd-shared-...\.so$|/lib/systemd$', n, re.X):
         o = o_shared
+    elif re.search(r'networkd(?!.*\.conf)', n, re.X):
+        o = o_networkd   
     elif re.search(r'sysusers(?!.*\.conf)', n, re.X):
         o = o_sysusers
     elif re.search(r'tmpfiles(?!.*\.conf)', n, re.X):

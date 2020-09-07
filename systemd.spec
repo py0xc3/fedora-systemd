@@ -153,6 +153,7 @@ Requires:       %{name}-libs = %{version}-%{release}
 Requires:       %{name}-shared = %{version}-%{release}
 Requires:       %{name}-sysusers = %{version}-%{release}
 Requires:       %{name}-tmpfiles = %{version}-%{release}
+Recommends:     %{name}-networkd = %{version}-%{release}
 Recommends:     diffutils
 Requires:       util-linux
 Recommends:     libxkbcommon%{?_isa}
@@ -309,6 +310,20 @@ and to write journal files from serialized journal contents.
 
 This package contains systemd-journal-gatewayd,
 systemd-journal-remote, and systemd-journal-upload.
+
+%package networkd
+Summary:        A system service that manages network configurations
+Requires:       %{name}%{?_isa} = %{version}-%{release}
+License:        LGPLv2+
+Requires(post):   systemd
+Requires(preun):  systemd
+Requires(postun): systemd
+
+%description networkd
+%{summary}.
+
+It detects and configures network devices as they appear,
+as well as creating virtual network devices.
 
 %package shared
 Summary:       Shared library object for systemd
@@ -668,8 +683,6 @@ if [ $1 -eq 0 ] ; then
                 serial-getty@.service \
                 console-getty.service \
                 debug-shell.service \
-                systemd-networkd.service \
-                systemd-networkd-wait-online.service \
                 systemd-resolved.service \
                 systemd-homed.service \
                 >/dev/null || :
@@ -804,6 +817,14 @@ fi
 %systemd_postun_with_restart systemd-journal-upload.service
 %firewalld_reload
 
+%preun networkd
+if [ $1 -eq 0 ] ; then
+        systemctl disable --quiet \
+                systemd-networkd.service \
+                systemd-networkd-wait-online.service \
+                >/dev/null || :
+fi
+
 %global _docdir_fmt %{name}
 
 %files -f %{name}.lang -f .file-list-rest
@@ -842,6 +863,8 @@ fi
 
 %files journal-remote -f .file-list-remote
 
+%files networkd -f .file-list-networkd
+
 %files shared -f .file-list-shared
 
 %files sysusers -f .file-list-sysusers
@@ -855,6 +878,7 @@ fi
 - Create shared, sysusers and tmpfiles sub-packages:
   Splits libsystemd-shared object, systemd-sysusers and systemd-tmpfiles
   into their own subpackages
+- Split out networkd sub-package and add to main package as recommended dependency
 
 * Wed Sep  2 2020 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 246.4-1
 - Update to latest stable version: a rework of how the unit cache mtime works
