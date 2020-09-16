@@ -15,7 +15,7 @@
 Name:           systemd
 Url:            https://www.freedesktop.org/wiki/Software/systemd
 Version:        243.8
-Release:        1%{?commit:.git%{shortcommit}}%{?dist}
+Release:        2%{?commit:.git%{shortcommit}}%{?dist}
 # For a breakdown of the licensing, see README
 License:        LGPLv2+ and MIT and GPLv2+
 Summary:        System and Service Manager
@@ -63,6 +63,7 @@ Patch0002:      0001-kernel-install-strip-BOOT_IMAGE-from-kernel-options.patch
 Patch0900:      0002-Revert-units-set-NoNewPrivileges-for-all-long-runnin.patch
 
 Patch0998:      0998-resolved-create-etc-resolv.conf-symlink-at-runtime.patch
+Patch0999:	0999-build-with-microhttpd-0.9.71-1.patch
 
 %ifarch %{ix86} x86_64 aarch64
 %global have_gnu_efi 1
@@ -707,6 +708,10 @@ fi
 %files tests -f .file-list-tests
 
 %changelog
+* Mon Sep 14 2020 Michael Riss <Michael.Riss@gmail.com> - 243.8-2
+- add patch to build against the changed API of microhttpd 0.9.71
+- rebuild to parse the new capabilities of the 5.8.6 kernel (#1878530)
+
 * Thu Mar 26 2020 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 243.8-1
 - Update to latest stable version
 - Modify the downstream udev rule to use bfq to only apply to disks (#1803500)
