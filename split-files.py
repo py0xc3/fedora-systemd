@@ -54,6 +54,8 @@ for file in files(buildroot):
         o = o_pam
     elif '/rpm/' in n:
         o = o_rpm_macros
+    elif '/usr/lib/systemd/tests' in n:
+        o = o_tests
     elif re.search(r'''/usr/lib/systemd/network/80-|
                        networkd|
                        networkctl
@@ -61,8 +63,6 @@ for file in files(buildroot):
         o = o_networkd
     elif re.search(r'/lib.*\.pc|/man3/|/usr/include|(?<!/libsystemd-shared-...).so$', n):
         o = o_devel
-    elif '/usr/lib/systemd/tests' in n:
-        o = o_tests
     elif re.search(r'''journal-(remote|gateway|upload)|
                        systemd-remote\.conf|
                        /usr/share/systemd/gatewayd|
