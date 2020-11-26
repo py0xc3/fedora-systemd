@@ -155,6 +155,7 @@ Requires:       %{name}-pam = %{version}-%{release}
 Requires:       %{name}-rpm-macros = %{version}-%{release}
 Requires:       %{name}-libs = %{version}-%{release}
 Recommends:     %{name}-networkd = %{version}-%{release}
+Recommends:     %{name}-firstboot = %{version}-%{release}
 Recommends:     diffutils
 Requires:       util-linux
 Recommends:     libxkbcommon%{?_isa}
@@ -268,6 +269,7 @@ Requires(preun):  systemd
 Requires(postun): systemd
 Requires(post): grep
 Requires:       kmod >= 18-4
+Recommends:     %{name}-repart = %{version}-%{release}
 # https://bodhi.fedoraproject.org/updates/FEDORA-2020-dd43dd05b1
 Obsoletes:      systemd < 245.6-1
 Provides:       udev = %{version}
@@ -291,6 +293,31 @@ Recommends:     libcryptsetup.so.12(CRYPTSETUP_2.0)(64bit)
 This package contains systemd-udev and the rules and hardware database
 needed to manage device nodes. This package is necessary on physical
 machines and in virtual machines, but not in containers.
+
+%package firstboot
+Summary:        First boot setup tool
+Requires:       %{name}%{?_isa} = %{version}-%{release}
+License:        LGPLv2+
+# TODO
+Obsoletes:      systemd < 246.6-2
+
+%description firstboot
+systemd-firstboot initializes the most basic system settings interactively on
+the first boot, or optionally non-interactively when a system image is created.
+
+%package repart
+Summary:        Re-partionning and GPT based automated mounting
+Requires:       %{name}-udev%{?_isa} = %{version}-%{release}
+License:        LGPLv2+
+# TODO
+Obsoletes:      systemd-udev < 246.6-2
+
+%description repart
+systemd-repart grows and adds partitions to a partition table.
+systemd-gpt-auto-generator is a unit generator that automatically discovers
+root, /home/, /srv/, /var/, /var/tmp/, the EFI System Partition, the Extended
+Boot Loader Partition and swap partitions and creates mount and swap units for
+them, based on the partition type GUIDs of GUID partition tables (GPT)
 
 %package container
 # Name is the same as in Debian
@@ -879,6 +906,10 @@ getent passwd systemd-network &>/dev/null || useradd -r -u 192 -l -g systemd-net
 %files devel -f .file-list-devel
 
 %files udev -f .file-list-udev
+
+%files firstboot -f .file-list-firstboot
+
+%files repart -f .file-list-repart
 
 %files container -f .file-list-container
 

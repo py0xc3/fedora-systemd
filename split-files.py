@@ -17,6 +17,8 @@ def files(root):
 
 o_libs = open('.file-list-libs', 'w')
 o_udev = open('.file-list-udev', 'w')
+o_firstboot = open('.file-list-firstboot', 'w')
+o_repart = open('.file-list-repart', 'w')
 o_pam = open('.file-list-pam', 'w')
 o_rpm_macros = open('.file-list-rpm-macros', 'w')
 o_devel = open('.file-list-devel', 'w')
@@ -107,8 +109,6 @@ for file in files(buildroot):
                        network/99-default.link|
                        growfs|makefs|makeswap|mkswap|
                        fsck|
-                       repart|
-                       gpt-auto|
                        volatile-root|
                        verity-setup|
                        remount-fs|
@@ -119,6 +119,12 @@ for file in files(buildroot):
                        /modprobe.d
     ''', n, re.X):
         o = o_udev
+    elif re.search(r'''firstboot''', n, re.X):
+        o = o_firstboot
+    elif re.search(r'''repart|
+                       gpt-auto
+    ''', n, re.X):
+        o = o_repart
     elif n.endswith('.standalone'):
         if 'tmpfiles' in n:
             o = o_standalone_tmpfiles
