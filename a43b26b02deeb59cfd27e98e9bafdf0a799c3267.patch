@@ -1,0 +1,103 @@
+From a43b26b02deeb59cfd27e98e9bafdf0a799c3267 Mon Sep 17 00:00:00 2001
+From: "Jonathan G. Underwood" <jonathan.underwood@gmail.com>
+Date: Thu, 24 Dec 2020 00:31:11 +0000
+Subject: [PATCH] cryptsetup: add support for workqueue options
+
+This commit adds support for disabling the read and write
+workqueues with the new crypttab options no-read-workqueue
+and no-write-workqueue. These correspond to the cryptsetup
+options --perf-no_read_workqueue and --perf-no_write_workqueue
+respectively.
+---
+ man/crypttab.xml            | 20 ++++++++++++++++++++
+ src/cryptsetup/cryptsetup.c | 12 ++++++++++++
+ src/shared/crypt-util.h     |  8 ++++++++
+ 3 files changed, 40 insertions(+)
+
+diff --git a/man/crypttab.xml b/man/crypttab.xml
+index ee54499bfe..d4f50a6051 100644
+--- a/man/crypttab.xml
++++ b/man/crypttab.xml
+@@ -272,6 +272,26 @@
+         </listitem>
+       </varlistentry>
+ 
++     <varlistentry>
++        <term><option>no-read-workqueue</option></term>
++
++        <listitem><para>Bypass dm-crypt internal workqueue and process read requests synchronously. The
++        default is to queue these requests and process them asynchronously.</para>
++
++        <para>This requires kernel 5.9 or newer.</para>
++        </listitem>
++      </varlistentry>
++
++      <varlistentry>
++        <term><option>no-write-workqueue</option></term>
++
++        <listitem><para>Bypass dm-crypt internal workqueue and process write requests synchronously. The
++        default is to queue these requests and process them asynchronously.</para>
++
++        <para>This requires kernel 5.9 or newer.</para>
++        </listitem>
++      </varlistentry>
++
+       <varlistentry>
+         <term><option>skip=</option></term>
+ 
+diff --git a/src/cryptsetup/cryptsetup.c b/src/cryptsetup/cryptsetup.c
+index 6d3f842dbe..12e32ebf05 100644
+--- a/src/cryptsetup/cryptsetup.c
++++ b/src/cryptsetup/cryptsetup.c
+@@ -55,6 +55,8 @@ static bool arg_verify = false;
+ static bool arg_discards = false;
+ static bool arg_same_cpu_crypt = false;
+ static bool arg_submit_from_crypt_cpus = false;
++static bool arg_no_read_workqueue = false;
++static bool arg_no_write_workqueue = false;
+ static bool arg_tcrypt_hidden = false;
+ static bool arg_tcrypt_system = false;
+ static bool arg_tcrypt_veracrypt = false;
+@@ -218,6 +220,10 @@ static int parse_one_option(const char *option) {
+                 arg_same_cpu_crypt = true;
+         else if (streq(option, "submit-from-crypt-cpus"))
+                 arg_submit_from_crypt_cpus = true;
++        else if (streq(option, "no-read-workqueue"))
++                arg_no_read_workqueue = true;
++        else if (streq(option, "no-write-workqueue"))
++                arg_no_write_workqueue = true;
+         else if (streq(option, "luks"))
+                 arg_type = ANY_LUKS;
+ /* since cryptsetup 2.3.0 (Feb 2020) */
+@@ -805,6 +811,12 @@ static uint32_t determine_flags(void) {
+         if (arg_submit_from_crypt_cpus)
+                 flags |= CRYPT_ACTIVATE_SUBMIT_FROM_CRYPT_CPUS;
+ 
++        if (arg_no_read_workqueue)
++                flags |= CRYPT_ACTIVATE_NO_READ_WORKQUEUE;
++
++        if (arg_no_write_workqueue)
++                flags |= CRYPT_ACTIVATE_NO_WRITE_WORKQUEUE;
++
+ #ifdef CRYPT_ACTIVATE_SERIALIZE_MEMORY_HARD_PBKDF
+         /* Try to decrease the risk of OOM event if memory hard key derivation function is in use */
+         /* https://gitlab.com/cryptsetup/cryptsetup/issues/446/ */
+diff --git a/src/shared/crypt-util.h b/src/shared/crypt-util.h
+index c25b11599c..ce44cd43e7 100644
+--- a/src/shared/crypt-util.h
++++ b/src/shared/crypt-util.h
+@@ -6,6 +6,14 @@
+ 
+ #include "macro.h"
+ 
++/* These next two are defined in libcryptsetup.h from cryptsetup version 2.3.4 forwards. */
++#ifndef CRYPT_ACTIVATE_NO_READ_WORKQUEUE
++#define CRYPT_ACTIVATE_NO_READ_WORKQUEUE (1 << 24)
++#endif
++#ifndef CRYPT_ACTIVATE_NO_WRITE_WORKQUEUE
++#define CRYPT_ACTIVATE_NO_WRITE_WORKQUEUE (1 << 25)
++#endif
++
+ DEFINE_TRIVIAL_CLEANUP_FUNC(struct crypt_device *, crypt_free);
+ 
+ void cryptsetup_log_glue(int level, const char *msg, void *usrptr);
