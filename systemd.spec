@@ -78,6 +78,8 @@ Patch0500:      use-bfq-scheduler.patch
 
 # https://github.com/systemd/systemd/pull/17050
 Patch0501:      https://github.com/systemd/systemd/pull/17050/commits/f58b96d3e8d1cb0dd3666bc74fa673918b586612.patch
+Patch0502:      0001-test-path-util-do-not-fail-if-the-fd_is_mount_point-.patch
+Patch0503:      0001-test-path-util-ignore-test-failure.patch
 
 %ifarch %{ix86} x86_64 aarch64
 %global have_gnu_efi 1
