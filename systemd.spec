@@ -21,7 +21,7 @@
 Name:           systemd
 Url:            https://www.freedesktop.org/wiki/Software/systemd
 Version:        248~rc4
-Release:        5%{?dist}
+Release:        6%{?dist}
 # For a breakdown of the licensing, see README
 License:        LGPLv2+ and MIT and GPLv2+
 Summary:        System and Service Manager
@@ -176,6 +176,7 @@ Requires:       %{name}-pam = %{version}-%{release}
 Requires:       %{name}-rpm-macros = %{version}-%{release}
 Requires:       %{name}-libs = %{version}-%{release}
 %{?fedora:Recommends:     %{name}-networkd = %{version}-%{release}}
+%{?fedora:Recommends:     %{name}-resolved = %{version}-%{release}}
 Recommends:     diffutils
 Requires:       util-linux
 Recommends:     libxkbcommon%{?_isa}
@@ -362,6 +363,16 @@ Obsoletes:      systemd < 246.6-2
 systemd-networkd is a system service that manages networks. It detects
 and configures network devices as they appear, as well as creating virtual
 network devices.
+
+%package resolved
+Summary:        Network Name Resolution manager
+Requires:       %{name}%{?_isa} = %{version}-%{release}
+Obsoletes:      %{name} < 248~rc4-3
+
+%description resolved
+systemd-resolved is a system service that provides network name resolution
+to local applications. It implements a caching and validating DNS/DNSSEC
+stub resolver, as well as an LLMNR and MulticastDNS resolver and responder.
 
 %package oomd-defaults
 Summary:        Configuration files for systemd-oomd
@@ -671,9 +682,6 @@ getent group systemd-journal &>/dev/null || groupadd -r -g 190 systemd-journal 2
 getent group systemd-coredump &>/dev/null || groupadd -r systemd-coredump 2>&1 || :
 getent passwd systemd-coredump &>/dev/null || useradd -r -l -g systemd-coredump -d / -s /sbin/nologin -c "systemd Core Dumper" systemd-coredump &>/dev/null || :
 
-getent group systemd-resolve &>/dev/null || groupadd -r -g 193 systemd-resolve 2>&1 || :
-getent passwd systemd-resolve &>/dev/null || useradd -r -u 193 -l -g systemd-resolve -d / -s /sbin/nologin -c "systemd Resolver" systemd-resolve &>/dev/null || :
-
 getent group systemd-oom &>/dev/null || groupadd -r systemd-oom 2>&1 || :
 getent passwd systemd-oom &>/dev/null || useradd -r -l -g systemd-oom -d / -s /sbin/nologin -c "systemd Userspace OOM Killer" systemd-oom &>/dev/null || :
 
@@ -747,25 +755,6 @@ setfacl -Rnm g:wheel:rx,d:g:wheel:rx,g:adm:rx,d:g:adm:rx /var/log/journal/ &>/de
 systemctl preset-all &>/dev/null || :
 systemctl --global preset-all &>/dev/null || :
 
-# Create /etc/resolv.conf symlink.
-# We would also create it using tmpfiles, but let's do this here
-# too before NetworkManager gets a chance. (systemd-tmpfiles invocation above
-# does not do this, because it's marked with ! and we don't specify --boot.)
-# https://bugzilla.redhat.com/show_bug.cgi?id=1873856
-#
-# If systemd is not running, don't overwrite the symlink because that
-# will immediately break DNS resolution, since systemd-resolved is
-# also not running (https://bugzilla.redhat.com/show_bug.cgi?id=1891847).
-#
-# Also don't creat the symlink to the stub when the stub is disabled (#1891847 again).
-if test -d /run/systemd/system/ &&
-   systemctl -q is-enabled systemd-resolved.service &>/dev/null &&
-   ! mountpoint /etc/resolv.conf &>/dev/null &&
-   ! systemd-analyze cat-config systemd/resolved.conf 2>/dev/null | \
-        grep -qE '^DNSStubListener\s*=\s*([nN][oO]?|[fF]|[fF][aA][lL][sS][eE]|0|[oO][fF][fF])$'; then
-  ln -fsv ../run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
-fi
-
 %postun
 if [ $1 -eq 1 ]; then
    [ -w %{_localstatedir} ] && journalctl --update-catalog || :
@@ -777,7 +766,7 @@ fi
 # FIXME: systemd-logind.service is excluded (https://github.com/systemd/systemd/pull/17558)
 # FIXME: user@*.service needs to be restarted, but using systemctl --user daemon-reexec
 
-%triggerun -- systemd < 246.1-1
+%triggerun resolved -- systemd < 246.1-1
 # This is for upgrades from previous versions before systemd-resolved became the default.
 systemctl --no-reload preset systemd-resolved.service &>/dev/null || :
 
@@ -919,6 +908,10 @@ fi
 getent group systemd-network &>/dev/null || groupadd -r -g 192 systemd-network 2>&1 || :
 getent passwd systemd-network &>/dev/null || useradd -r -u 192 -l -g systemd-network -d / -s /sbin/nologin -c "systemd Network Management" systemd-network &>/dev/null || :
 
+%pre resolved
+getent group systemd-resolve &>/dev/null || groupadd -r -g 193 systemd-resolve 2>&1 || :
+getent passwd systemd-resolve &>/dev/null || useradd -r -u 193 -l -g systemd-resolve -d / -s /sbin/nologin -c "systemd Resolver" systemd-resolve &>/dev/null || :
+
 %post networkd
 # systemd-networkd was split out in systemd-246.6-2.
 # Ideally, we would have a trigger scriptlet to record enablement
@@ -937,6 +930,33 @@ fi
 
 %preun networkd
 %systemd_preun systemd-networkd.service systemd-networkd-wait-online.service
+
+%preun resolved
+if [ $1 -eq 0 ] ; then
+        systemctl disable --quiet \
+                systemd-resolved.service \
+                >/dev/null || :
+fi
+
+%post resolved
+# Create /etc/resolv.conf symlink.
+# We would also create it using tmpfiles, but let's do this here
+# too before NetworkManager gets a chance. (systemd-tmpfiles invocation above
+# does not do this, because it's marked with ! and we don't specify --boot.)
+# https://bugzilla.redhat.com/show_bug.cgi?id=1873856
+#
+# If systemd is not running, don't overwrite the symlink because that
+# will immediately break DNS resolution, since systemd-resolved is
+# also not running (https://bugzilla.redhat.com/show_bug.cgi?id=1891847).
+#
+# Also don't creat the symlink to the stub when the stub is disabled (#1891847 again).
+if test -d /run/systemd/system/ &&
+   systemctl -q is-enabled systemd-resolved.service &>/dev/null &&
+   ! mountpoint /etc/resolv.conf &>/dev/null &&
+   ! systemd-analyze cat-config systemd/resolved.conf 2>/dev/null | \
+        grep -qE '^DNSStubListener\s*=\s*([nN][oO]?|[fF]|[fF][aA][lL][sS][eE]|0|[oO][fF][fF])$'; then
+  ln -fsv ../run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+fi
 
 %global _docdir_fmt %{name}
 
@@ -968,6 +988,8 @@ fi
 
 %files rpm-macros -f .file-list-rpm-macros
 
+%files resolved -f .file-list-resolve
+
 %files devel -f .file-list-devel
 
 %files udev -f .file-list-udev
@@ -987,6 +1009,9 @@ fi
 %files standalone-sysusers -f .file-list-standalone-sysusers
 
 %changelog
+* Fri Mar 26 2021 Petr Menšík <pemensik@redhat.com> - 248~rc4-6
+- Move systemd-resolved into systemd-resolved subpackage
+
 * Fri Mar 26 2021 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 248~rc4-5
 - Do not preset systemd-networkd.service and systemd-networkd-wait-online.service
   on upgrades from before systemd-networkd was split out (#1943263)
