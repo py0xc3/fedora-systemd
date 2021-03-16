@@ -21,7 +21,7 @@
 Name:           systemd
 Url:            https://www.freedesktop.org/wiki/Software/systemd
 Version:        248~rc2
-Release:        6%{?dist}
+Release:        7%{?dist}
 # For a breakdown of the licensing, see README
 License:        LGPLv2+ and MIT and GPLv2+
 Summary:        System and Service Manager
@@ -64,9 +64,6 @@ Source22:       sysusers.attr
 Source23:       sysusers.prov
 Source24:       sysusers.generate-pre.sh
 
-# Disable resolved caching to workaround #1933433
-Source100:      nocache.conf
-
 %if 0
 GIT_DIR=../../src/systemd/.git git format-patch-ab --no-signature -M -N v235..v235-stable
 i=1; for j in 00*patch; do printf "Patch%04d:      %s\n" $i $j; i=$((i+1));done|xclip
@@ -77,9 +74,10 @@ GIT_DIR=../../src/systemd/.git git diffab -M v233..master@{2017-06-15} -- hwdb/[
 
 # https://bugzilla.redhat.com/show_bug.cgi?id=1933433
 Patch0000:      https://github.com/systemd/systemd/pull/18892.patch
+Patch0001:      https://github.com/systemd/systemd/pull/19009.patch
 
 # https://bugzilla.redhat.com/show_bug.cgi?id=1931034
-Patch0001:      https://github.com/systemd/systemd/pull/18915.patch
+Patch0002:      https://github.com/systemd/systemd/pull/18915.patch
 
 # Downstream-only patches (5000–9999)
 # https://bugzilla.redhat.com/show_bug.cgi?id=1738828
@@ -560,9 +558,6 @@ touch %{buildroot}%{_localstatedir}/lib/private/systemd/journal-upload/state
 # Install yum protection fragment
 install -Dm0644 %{SOURCE4} %{buildroot}/etc/dnf/protected.d/systemd.conf
 
-# Install resolved cache disable fragment
-install -Dm0644 -t %{buildroot}%{pkgdir}/resolved.conf.d %{SOURCE100}
-
 install -Dm0644 -t %{buildroot}/usr/lib/firewalld/services/ %{SOURCE7} %{SOURCE8}
 
 # Restore systemd-user pam config from before "removal of Fedora-specific bits"
@@ -958,6 +953,9 @@ getent passwd systemd-network &>/dev/null || useradd -r -u 192 -l -g systemd-net
 %files standalone-sysusers -f .file-list-standalone-sysusers
 
 %changelog
+* Tue Mar 16 2021 Michael Catanzaro <mcatanzaro@redhat.com> - 248~rc2-7
+- Add upstream fix for stub resolver and reenable resolved cache (#1933433)
+
 * Fri Mar 12 2021 Adam Williamson <awilliam@redhat.com> - 248~rc2-6
 - Disable resolved cache via config snippet (#1933433)
 
