@@ -21,7 +21,7 @@
 Name:           systemd
 Url:            https://www.freedesktop.org/wiki/Software/systemd
 Version:        248~rc2
-Release:        8%{?dist}
+Release:        9%{?dist}
 # For a breakdown of the licensing, see README
 License:        LGPLv2+ and MIT and GPLv2+
 Summary:        System and Service Manager
@@ -80,6 +80,10 @@ Patch0001:      https://github.com/systemd/systemd/pull/18915.patch
 # https://github.com/systemd/systemd/pull/19009
 # Fixes more CNAME issues in stub resolver (#1933433)
 Patch0002:      19009-rediff.patch
+
+# Fixes issues with systemd-oomd prefering to kill old cgroups
+Patch0003:      https://github.com/systemd/systemd/pull/19011.patch
+
 
 # Downstream-only patches (5000–9999)
 # https://bugzilla.redhat.com/show_bug.cgi?id=1738828
@@ -955,6 +959,9 @@ getent passwd systemd-network &>/dev/null || useradd -r -u 192 -l -g systemd-net
 %files standalone-sysusers -f .file-list-standalone-sysusers
 
 %changelog
+* Wed Mar 17 2021 Benjamin Berg <bberg@redhat.com>
+- Backport PR #19011 to fix oomd prefering to kill old cgroups
+
 * Tue Mar 16 2021 Adam Williamson <awilliam@redhat.com> - 248~rc2-8
 - Drop the resolved cache disablement config snippet
 

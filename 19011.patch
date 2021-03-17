@@ -1,0 +1,637 @@
+From b037a6da3162f5de75a675ce0cd85facfbd8d403 Mon Sep 17 00:00:00 2001
+From: Anita Zhang <the.anitazha@gmail.com>
+Date: Mon, 15 Mar 2021 16:06:42 -0700
+Subject: [PATCH 1/5] oomd: new helper
+ oomd_update_cgroup_contexts_between_hashmaps
+
+---
+ src/oom/oomd-util.c      | 19 ++++++++++++++++
+ src/oom/oomd-util.h      |  3 +++
+ src/oom/test-oomd-util.c | 48 ++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 70 insertions(+)
+
+diff --git a/src/oom/oomd-util.c b/src/oom/oomd-util.c
+index d8dbb750139..0c63b20dc6c 100644
+--- a/src/oom/oomd-util.c
++++ b/src/oom/oomd-util.c
+@@ -413,6 +413,25 @@ int oomd_insert_cgroup_context(Hashmap *old_h, Hashmap *new_h, const char *path)
+         return 0;
+ }
+ 
++void oomd_update_cgroup_contexts_between_hashmaps(Hashmap *old_h, Hashmap *curr_h) {
++        OomdCGroupContext *ctx;
++
++        assert(old_h);
++        assert(curr_h);
++
++        HASHMAP_FOREACH(ctx, curr_h) {
++                OomdCGroupContext *old_ctx;
++
++                old_ctx = hashmap_get(old_h, ctx->path);
++                if (!old_ctx)
++                        continue;
++
++                ctx->last_pgscan = old_ctx->pgscan;
++                ctx->mem_pressure_limit = old_ctx->mem_pressure_limit;
++                ctx->last_hit_mem_pressure_limit = old_ctx->last_hit_mem_pressure_limit;
++        }
++}
++
+ void oomd_dump_swap_cgroup_context(const OomdCGroupContext *ctx, FILE *f, const char *prefix) {
+         char swap[FORMAT_BYTES_MAX];
+ 
+diff --git a/src/oom/oomd-util.h b/src/oom/oomd-util.h
+index 181443ae7a6..cf9f00dccc5 100644
+--- a/src/oom/oomd-util.h
++++ b/src/oom/oomd-util.h
+@@ -119,6 +119,9 @@ int oomd_system_context_acquire(const char *proc_swaps_path, OomdSystemContext *
+  * was no prior data to reference. */
+ int oomd_insert_cgroup_context(Hashmap *old_h, Hashmap *new_h, const char *path);
+ 
++/* Update each OomdCGroupContext in `curr_h` with prior interval information from `old_h`. */
++void oomd_update_cgroup_contexts_between_hashmaps(Hashmap *old_h, Hashmap *curr_h);
++
+ void oomd_dump_swap_cgroup_context(const OomdCGroupContext *ctx, FILE *f, const char *prefix);
+ void oomd_dump_memory_pressure_cgroup_context(const OomdCGroupContext *ctx, FILE *f, const char *prefix);
+ void oomd_dump_system_context(const OomdSystemContext *ctx, FILE *f, const char *prefix);
+diff --git a/src/oom/test-oomd-util.c b/src/oom/test-oomd-util.c
+index 0b1a3adfccf..748753188d0 100644
+--- a/src/oom/test-oomd-util.c
++++ b/src/oom/test-oomd-util.c
+@@ -176,6 +176,53 @@ static void test_oomd_cgroup_context_acquire_and_insert(void) {
+         }
+ }
+ 
++static void test_oomd_update_cgroup_contexts_between_hashmaps(void) {
++        _cleanup_hashmap_free_ Hashmap *h_old = NULL, *h_new = NULL;
++        OomdCGroupContext *c_old, *c_new;
++        char **paths = STRV_MAKE("/0.slice",
++                                 "/1.slice");
++
++        OomdCGroupContext ctx_old[3] = {
++                { .path = paths[0],
++                  .mem_pressure_limit = 5,
++                  .last_hit_mem_pressure_limit = 777,
++                  .pgscan = 57 },
++                { .path = paths[1],
++                  .mem_pressure_limit = 6,
++                  .last_hit_mem_pressure_limit = 888,
++                  .pgscan = 42 },
++        };
++
++        OomdCGroupContext ctx_new[3] = {
++                { .path = paths[0],
++                  .pgscan = 100 },
++                { .path = paths[1],
++                  .pgscan = 101 },
++        };
++
++        assert_se(h_old = hashmap_new(&string_hash_ops));
++        assert_se(hashmap_put(h_old, paths[0], &ctx_old[0]) >= 0);
++        assert_se(hashmap_put(h_old, paths[1], &ctx_old[1]) >= 0);
++
++        assert_se(h_new = hashmap_new(&string_hash_ops));
++        assert_se(hashmap_put(h_new, paths[0], &ctx_new[0]) >= 0);
++        assert_se(hashmap_put(h_new, paths[1], &ctx_new[1]) >= 0);
++
++        oomd_update_cgroup_contexts_between_hashmaps(h_old, h_new);
++
++        assert_se(c_old = hashmap_get(h_old, "/0.slice"));
++        assert_se(c_new = hashmap_get(h_new, "/0.slice"));
++        assert_se(c_old->pgscan == c_new->last_pgscan);
++        assert_se(c_old->mem_pressure_limit == c_new->mem_pressure_limit);
++        assert_se(c_old->last_hit_mem_pressure_limit == c_new->last_hit_mem_pressure_limit);
++
++        assert_se(c_old = hashmap_get(h_old, "/1.slice"));
++        assert_se(c_new = hashmap_get(h_new, "/1.slice"));
++        assert_se(c_old->pgscan == c_new->last_pgscan);
++        assert_se(c_old->mem_pressure_limit == c_new->mem_pressure_limit);
++        assert_se(c_old->last_hit_mem_pressure_limit == c_new->last_hit_mem_pressure_limit);
++}
++
+ static void test_oomd_system_context_acquire(void) {
+         _cleanup_(unlink_tempfilep) char path[] = "/oomdgetsysctxtestXXXXXX";
+         OomdSystemContext ctx;
+@@ -395,6 +442,7 @@ int main(void) {
+ 
+         test_setup_logging(LOG_DEBUG);
+ 
++        test_oomd_update_cgroup_contexts_between_hashmaps();
+         test_oomd_system_context_acquire();
+         test_oomd_pressure_above();
+         test_oomd_memory_reclaim();
+
+From 91cbb4bdd64048931c18e4b9a3d0ab85d77f93fe Mon Sep 17 00:00:00 2001
+From: Anita Zhang <the.anitazha@gmail.com>
+Date: Mon, 15 Mar 2021 16:34:26 -0700
+Subject: [PATCH 2/5] oomd: update memory pressure candidates every interval
+
+---
+ src/oom/oomd-manager.c | 37 +++++++++++++++++++++++++++++++------
+ src/oom/oomd-manager.h |  1 +
+ 2 files changed, 32 insertions(+), 6 deletions(-)
+
+diff --git a/src/oom/oomd-manager.c b/src/oom/oomd-manager.c
+index 085fc6487fd..6ce96062a1c 100644
+--- a/src/oom/oomd-manager.c
++++ b/src/oom/oomd-manager.c
+@@ -232,6 +232,26 @@ static int get_monitored_cgroup_contexts_candidates(Hashmap *monitored_cgroups,
+         return 0;
+ }
+ 
++static int update_monitored_cgroup_contexts_candidates(Hashmap *monitored_cgroups, Hashmap **candidates) {
++        _cleanup_hashmap_free_ Hashmap *new_candidates = NULL;
++        int r;
++
++        assert(monitored_cgroups);
++        assert(candidates);
++        assert(*candidates);
++
++        r = get_monitored_cgroup_contexts_candidates(monitored_cgroups, &new_candidates);
++        if (r < 0)
++                return log_debug_errno(r, "Failed to get candidate contexts: %m");
++
++        oomd_update_cgroup_contexts_between_hashmaps(*candidates, new_candidates);
++
++        hashmap_free(*candidates);
++        *candidates = TAKE_PTR(new_candidates);
++
++        return 0;
++}
++
+ static int acquire_managed_oom_connect(Manager *m) {
+         _cleanup_(varlink_close_unrefp) Varlink *link = NULL;
+         int r;
+@@ -297,6 +317,11 @@ static int monitor_cgroup_contexts_handler(sd_event_source *s, uint64_t usec, vo
+         if (r == -ENOMEM)
+                 return log_error_errno(r, "Failed to update monitored memory pressure cgroup contexts");
+ 
++        r = update_monitored_cgroup_contexts_candidates(
++                        m->monitored_mem_pressure_cgroup_contexts, &m->monitored_mem_pressure_cgroup_contexts_candidates);
++        if (r == -ENOMEM)
++                return log_error_errno(r, "Failed to update monitored memory pressure candidate cgroup contexts");
++
+         r = oomd_system_context_acquire("/proc/swaps", &m->system_context);
+         /* If there aren't units depending on swap actions, the only error we exit on is ENOMEM.
+          * Allow ENOENT in the event that swap is disabled on the system. */
+@@ -326,18 +351,13 @@ static int monitor_cgroup_contexts_handler(sd_event_source *s, uint64_t usec, vo
+                  * this will cause pressure to remain high. Thus if there isn't any reclaim pressure, no need
+                  * to kill something (it won't help anyways). */
+                 if ((usec_now - m->last_reclaim_at) <= RECLAIM_DURATION_USEC) {
+-                        _cleanup_hashmap_free_ Hashmap *candidates = NULL;
+                         OomdCGroupContext *t;
+ 
+-                        r = get_monitored_cgroup_contexts_candidates(m->monitored_mem_pressure_cgroup_contexts, &candidates);
+-                        if (r == -ENOMEM)
+-                                return log_error_errno(r, "Failed to get monitored memory pressure cgroup candidates");
+-
+                         SET_FOREACH(t, targets) {
+                                 log_notice("Memory pressure for %s is greater than %lu for more than %"PRIu64" seconds and there was reclaim activity",
+                                         t->path, LOAD_INT(t->mem_pressure_limit), m->default_mem_pressure_duration_usec / USEC_PER_SEC);
+ 
+-                                r = oomd_kill_by_pgscan(candidates, t->path, m->dry_run);
++                                r = oomd_kill_by_pgscan(m->monitored_mem_pressure_cgroup_contexts_candidates, t->path, m->dry_run);
+                                 if (r == -ENOMEM)
+                                         return log_error_errno(r, "Failed to kill cgroup processes by pgscan");
+                                 if (r < 0)
+@@ -412,6 +432,7 @@ Manager* manager_free(Manager *m) {
+ 
+         hashmap_free(m->monitored_swap_cgroup_contexts);
+         hashmap_free(m->monitored_mem_pressure_cgroup_contexts);
++        hashmap_free(m->monitored_mem_pressure_cgroup_contexts_candidates);
+ 
+         return mfree(m);
+ }
+@@ -448,6 +469,10 @@ int manager_new(Manager **ret) {
+         if (!m->monitored_mem_pressure_cgroup_contexts)
+                 return -ENOMEM;
+ 
++        m->monitored_mem_pressure_cgroup_contexts_candidates = hashmap_new(&oomd_cgroup_ctx_hash_ops);
++        if (!m->monitored_mem_pressure_cgroup_contexts_candidates)
++                return -ENOMEM;
++
+         *ret = TAKE_PTR(m);
+         return 0;
+ }
+diff --git a/src/oom/oomd-manager.h b/src/oom/oomd-manager.h
+index 9ab8494c6d3..9c580c8a249 100644
+--- a/src/oom/oomd-manager.h
++++ b/src/oom/oomd-manager.h
+@@ -40,6 +40,7 @@ struct Manager {
+          * Used to detect when to take action. */
+         Hashmap *monitored_swap_cgroup_contexts;
+         Hashmap *monitored_mem_pressure_cgroup_contexts;
++        Hashmap *monitored_mem_pressure_cgroup_contexts_candidates;
+ 
+         OomdSystemContext system_context;
+ 
+
+From 88e47952af55f38e3ae2a3129df7438eb05c0e5d Mon Sep 17 00:00:00 2001
+From: Anita Zhang <the.anitazha@gmail.com>
+Date: Mon, 15 Mar 2021 17:21:45 -0700
+Subject: [PATCH 3/5] oomd: sort by pgscan rate not pgscan
+
+For pressure based killing we want to target who has the highest
+increase in pgscan from the previous interval (vs. the previous logic
+which used raw pgscan). This will prevent biasing towards long running
+cgroups as mentioned in #19007.
+---
+ src/oom/oomd-manager.c   |  4 +--
+ src/oom/oomd-util.c      |  4 +--
+ src/oom/oomd-util.h      | 22 +++++++++++++---
+ src/oom/test-oomd-util.c | 54 ++++++++++++++++++++++++++--------------
+ 4 files changed, 58 insertions(+), 26 deletions(-)
+
+diff --git a/src/oom/oomd-manager.c b/src/oom/oomd-manager.c
+index 6ce96062a1c..72781f3e88a 100644
+--- a/src/oom/oomd-manager.c
++++ b/src/oom/oomd-manager.c
+@@ -357,9 +357,9 @@ static int monitor_cgroup_contexts_handler(sd_event_source *s, uint64_t usec, vo
+                                 log_notice("Memory pressure for %s is greater than %lu for more than %"PRIu64" seconds and there was reclaim activity",
+                                         t->path, LOAD_INT(t->mem_pressure_limit), m->default_mem_pressure_duration_usec / USEC_PER_SEC);
+ 
+-                                r = oomd_kill_by_pgscan(m->monitored_mem_pressure_cgroup_contexts_candidates, t->path, m->dry_run);
++                                r = oomd_kill_by_pgscan_rate(m->monitored_mem_pressure_cgroup_contexts_candidates, t->path, m->dry_run);
+                                 if (r == -ENOMEM)
+-                                        return log_error_errno(r, "Failed to kill cgroup processes by pgscan");
++                                        return log_error_errno(r, "Failed to kill cgroup processes by pgscan rate: %m");
+                                 if (r < 0)
+                                         log_info("Failed to kill any cgroup(s) under %s based on pressure", t->path);
+                                 else {
+diff --git a/src/oom/oomd-util.c b/src/oom/oomd-util.c
+index 0c63b20dc6c..0ddb197f2b0 100644
+--- a/src/oom/oomd-util.c
++++ b/src/oom/oomd-util.c
+@@ -208,13 +208,13 @@ int oomd_cgroup_kill(const char *path, bool recurse, bool dry_run) {
+         return set_size(pids_killed) != 0;
+ }
+ 
+-int oomd_kill_by_pgscan(Hashmap *h, const char *prefix, bool dry_run) {
++int oomd_kill_by_pgscan_rate(Hashmap *h, const char *prefix, bool dry_run) {
+         _cleanup_free_ OomdCGroupContext **sorted = NULL;
+         int r;
+ 
+         assert(h);
+ 
+-        r = oomd_sort_cgroup_contexts(h, compare_pgscan_and_memory_usage, prefix, &sorted);
++        r = oomd_sort_cgroup_contexts(h, compare_pgscan_rate_and_memory_usage, prefix, &sorted);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/oom/oomd-util.h b/src/oom/oomd-util.h
+index cf9f00dccc5..560697a4f46 100644
+--- a/src/oom/oomd-util.h
++++ b/src/oom/oomd-util.h
+@@ -66,7 +66,8 @@ bool oomd_swap_free_below(const OomdSystemContext *ctx, int threshold_permyriad)
+ 
+ /* The compare functions will sort from largest to smallest, putting all the contexts with "avoid" at the end
+  * (after the smallest values). */
+-static inline int compare_pgscan_and_memory_usage(OomdCGroupContext * const *c1, OomdCGroupContext * const *c2) {
++static inline int compare_pgscan_rate_and_memory_usage(OomdCGroupContext * const *c1, OomdCGroupContext * const *c2) {
++        uint64_t last1, last2;
+         int r;
+ 
+         assert(c1);
+@@ -76,7 +77,22 @@ static inline int compare_pgscan_and_memory_usage(OomdCGroupContext * const *c1,
+         if (r != 0)
+                 return r;
+ 
+-        r = CMP((*c2)->pgscan, (*c1)->pgscan);
++        /* If last_pgscan > pgscan, assume the cgroup was recreated and reset last_pgscan to zero. */
++        last2 = (*c2)->last_pgscan;
++        if ((*c2)->last_pgscan > (*c2)->pgscan) {
++                log_info("Last pgscan %" PRIu64 "greater than current pgscan %" PRIu64 "for %s. Using last pgscan of zero.",
++                                (*c2)->last_pgscan, (*c2)->pgscan, (*c2)->path);
++                last2 = 0;
++        }
++
++        last1 = (*c1)->last_pgscan;
++        if ((*c1)->last_pgscan > (*c1)->pgscan) {
++                log_info("Last pgscan %" PRIu64 "greater than current pgscan %" PRIu64 "for %s. Using last pgscan of zero.",
++                                (*c1)->last_pgscan, (*c1)->pgscan, (*c1)->path);
++                last1 = 0;
++        }
++
++        r = CMP((*c2)->pgscan - last2, (*c1)->pgscan - last1);
+         if (r != 0)
+                 return r;
+ 
+@@ -107,7 +123,7 @@ int oomd_cgroup_kill(const char *path, bool recurse, bool dry_run);
+ /* The following oomd_kill_by_* functions return 1 if processes were killed, or negative otherwise. */
+ /* If `prefix` is supplied, only cgroups whose paths start with `prefix` are eligible candidates. Otherwise,
+  * everything in `h` is a candidate. */
+-int oomd_kill_by_pgscan(Hashmap *h, const char *prefix, bool dry_run);
++int oomd_kill_by_pgscan_rate(Hashmap *h, const char *prefix, bool dry_run);
+ int oomd_kill_by_swap_usage(Hashmap *h, bool dry_run);
+ 
+ int oomd_cgroup_context_acquire(const char *path, OomdCGroupContext **ret);
+diff --git a/src/oom/test-oomd-util.c b/src/oom/test-oomd-util.c
+index 748753188d0..bd1c574ca7f 100644
+--- a/src/oom/test-oomd-util.c
++++ b/src/oom/test-oomd-util.c
+@@ -372,33 +372,45 @@ static void test_oomd_sort_cgroups(void) {
+                                  "/herp.slice/derp.scope",
+                                  "/herp.slice/derp.scope/sheep.service",
+                                  "/zupa.slice",
++                                 "/boop.slice",
+                                  "/omitted.slice",
+                                  "/avoid.slice");
+ 
+-        OomdCGroupContext ctx[6] = {
++        OomdCGroupContext ctx[7] = {
+                 { .path = paths[0],
+                   .swap_usage = 20,
+-                  .pgscan = 60,
++                  .last_pgscan = 0,
++                  .pgscan = 33,
+                   .current_memory_usage = 10 },
+                 { .path = paths[1],
+                   .swap_usage = 60,
+-                  .pgscan = 40,
++                  .last_pgscan = 33,
++                  .pgscan = 1,
+                   .current_memory_usage = 20 },
+                 { .path = paths[2],
+                   .swap_usage = 40,
+-                  .pgscan = 40,
++                  .last_pgscan = 1,
++                  .pgscan = 33,
+                   .current_memory_usage = 40 },
+                 { .path = paths[3],
+                   .swap_usage = 10,
+-                  .pgscan = 80,
++                  .last_pgscan = 33,
++                  .pgscan = 2,
+                   .current_memory_usage = 10 },
+                 { .path = paths[4],
++                  .swap_usage = 11,
++                  .last_pgscan = 33,
++                  .pgscan = 33,
++                  .current_memory_usage = 10 },
++                { .path = paths[5],
+                   .swap_usage = 90,
+-                  .pgscan = 100,
++                  .last_pgscan = 0,
++                  .pgscan = UINT64_MAX,
+                   .preference = MANAGED_OOM_PREFERENCE_OMIT },
+-                { .path = paths[5],
++                { .path = paths[6],
+                   .swap_usage = 99,
+-                  .pgscan = 200,
++                  .last_pgscan = 0,
++                  .pgscan = UINT64_MAX,
+                   .preference = MANAGED_OOM_PREFERENCE_AVOID },
+         };
+ 
+@@ -408,32 +420,36 @@ static void test_oomd_sort_cgroups(void) {
+         assert_se(hashmap_put(h, "/herp.slice/derp.scope", &ctx[1]) >= 0);
+         assert_se(hashmap_put(h, "/herp.slice/derp.scope/sheep.service", &ctx[2]) >= 0);
+         assert_se(hashmap_put(h, "/zupa.slice", &ctx[3]) >= 0);
+-        assert_se(hashmap_put(h, "/omitted.slice", &ctx[4]) >= 0);
+-        assert_se(hashmap_put(h, "/avoid.slice", &ctx[5]) >= 0);
++        assert_se(hashmap_put(h, "/boop.slice", &ctx[4]) >= 0);
++        assert_se(hashmap_put(h, "/omitted.slice", &ctx[5]) >= 0);
++        assert_se(hashmap_put(h, "/avoid.slice", &ctx[6]) >= 0);
+ 
+-        assert_se(oomd_sort_cgroup_contexts(h, compare_swap_usage, NULL, &sorted_cgroups) == 5);
++        assert_se(oomd_sort_cgroup_contexts(h, compare_swap_usage, NULL, &sorted_cgroups) == 6);
+         assert_se(sorted_cgroups[0] == &ctx[1]);
+         assert_se(sorted_cgroups[1] == &ctx[2]);
+         assert_se(sorted_cgroups[2] == &ctx[0]);
+-        assert_se(sorted_cgroups[3] == &ctx[3]);
+-        assert_se(sorted_cgroups[4] == &ctx[5]);
++        assert_se(sorted_cgroups[3] == &ctx[4]);
++        assert_se(sorted_cgroups[4] == &ctx[3]);
++        assert_se(sorted_cgroups[5] == &ctx[6]);
+         sorted_cgroups = mfree(sorted_cgroups);
+ 
+-        assert_se(oomd_sort_cgroup_contexts(h, compare_pgscan_and_memory_usage, NULL, &sorted_cgroups) == 5);
+-        assert_se(sorted_cgroups[0] == &ctx[3]);
+-        assert_se(sorted_cgroups[1] == &ctx[0]);
+-        assert_se(sorted_cgroups[2] == &ctx[2]);
++        assert_se(oomd_sort_cgroup_contexts(h, compare_pgscan_rate_and_memory_usage, NULL, &sorted_cgroups) == 6);
++        assert_se(sorted_cgroups[0] == &ctx[0]);
++        assert_se(sorted_cgroups[1] == &ctx[2]);
++        assert_se(sorted_cgroups[2] == &ctx[3]);
+         assert_se(sorted_cgroups[3] == &ctx[1]);
+-        assert_se(sorted_cgroups[4] == &ctx[5]);
++        assert_se(sorted_cgroups[4] == &ctx[4]);
++        assert_se(sorted_cgroups[5] == &ctx[6]);
+         sorted_cgroups = mfree(sorted_cgroups);
+ 
+-        assert_se(oomd_sort_cgroup_contexts(h, compare_pgscan_and_memory_usage, "/herp.slice/derp.scope", &sorted_cgroups) == 2);
++        assert_se(oomd_sort_cgroup_contexts(h, compare_pgscan_rate_and_memory_usage, "/herp.slice/derp.scope", &sorted_cgroups) == 2);
+         assert_se(sorted_cgroups[0] == &ctx[2]);
+         assert_se(sorted_cgroups[1] == &ctx[1]);
+         assert_se(sorted_cgroups[2] == 0);
+         assert_se(sorted_cgroups[3] == 0);
+         assert_se(sorted_cgroups[4] == 0);
+         assert_se(sorted_cgroups[5] == 0);
++        assert_se(sorted_cgroups[6] == 0);
+         sorted_cgroups = mfree(sorted_cgroups);
+ }
+ 
+
+From bb08124092d601609ef09571a01db218c002191c Mon Sep 17 00:00:00 2001
+From: Anita Zhang <the.anitazha@gmail.com>
+Date: Mon, 15 Mar 2021 17:38:45 -0700
+Subject: [PATCH 4/5] oomctl: show last_pgscan
+
+---
+ src/oom/oomd-util.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/oom/oomd-util.c b/src/oom/oomd-util.c
+index 0ddb197f2b0..7860f2154d1 100644
+--- a/src/oom/oomd-util.c
++++ b/src/oom/oomd-util.c
+@@ -477,10 +477,12 @@ void oomd_dump_memory_pressure_cgroup_context(const OomdCGroupContext *ctx, FILE
+                 fprintf(f,
+                         "%s\tMemory Min: %s\n"
+                         "%s\tMemory Low: %s\n"
+-                        "%s\tPgscan: %" PRIu64 "\n",
++                        "%s\tPgscan: %" PRIu64 "\n"
++                        "%s\tLast Pgscan: %" PRIu64 "\n",
+                         strempty(prefix), format_bytes_cgroup_protection(mem_min, sizeof(mem_min), ctx->memory_min),
+                         strempty(prefix), format_bytes_cgroup_protection(mem_low, sizeof(mem_low), ctx->memory_low),
+-                        strempty(prefix), ctx->pgscan);
++                        strempty(prefix), ctx->pgscan,
++                        strempty(prefix), ctx->last_pgscan);
+ }
+ 
+ void oomd_dump_system_context(const OomdSystemContext *ctx, FILE *f, const char *prefix) {
+
+From 77b04c0a6c260e66720fb62a9d6e5b7899bb5142 Mon Sep 17 00:00:00 2001
+From: Anita Zhang <the.anitazha@gmail.com>
+Date: Tue, 16 Mar 2021 17:57:50 -0700
+Subject: [PATCH 5/5] oomd: clean up error handling
+
+- Log debug if we're going to ignore an error
+- Add %m if we use log_*_errno()
+- log_oom() when checking ENOMEM
+---
+ src/oom/oomd-manager.c | 58 ++++++++++++++++++++++++++++++------------
+ 1 file changed, 42 insertions(+), 16 deletions(-)
+
+diff --git a/src/oom/oomd-manager.c b/src/oom/oomd-manager.c
+index 72781f3e88a..345f8a77cfa 100644
+--- a/src/oom/oomd-manager.c
++++ b/src/oom/oomd-manager.c
+@@ -117,6 +117,8 @@ static int process_managed_oom_reply(
+                         r = ret;
+                         goto finish;
+                 }
++                if (ret < 0 && ret != -EEXIST)
++                        log_debug_errno(ret, "Failed to insert reply, ignoring: %m");
+ 
+                 /* Always update the limit in case it was changed. For non-memory pressure detection the value is
+                  * ignored so always updating it here is not a problem. */
+@@ -156,7 +158,11 @@ static int recursively_get_cgroup_context(Hashmap *new_h, const char *path) {
+                 return r;
+         else if (r == 0) { /* No subgroups? We're a leaf node */
+                 r = oomd_insert_cgroup_context(NULL, new_h, path);
+-                return (r == -ENOMEM) ? r : 0;
++                if (r == -ENOMEM)
++                        return r;
++                if (r < 0)
++                        log_debug_errno(r, "Failed to insert context for %s, ignoring: %m", path);
++                return 0;
+         }
+ 
+         do {
+@@ -171,8 +177,12 @@ static int recursively_get_cgroup_context(Hashmap *new_h, const char *path) {
+ 
+                 r = cg_get_attribute_as_bool("memory", cg_path, "memory.oom.group", &oom_group);
+                 /* The cgroup might be gone. Skip it as a candidate since we can't get information on it. */
+-                if (r < 0)
+-                        return (r == -ENOMEM) ? r : 0;
++                if (r == -ENOMEM)
++                        return r;
++                if (r < 0) {
++                        log_debug_errno(r, "Failed to read memory.oom.group from %s, ignoring: %m", cg_path);
++                        return 0;
++                }
+ 
+                 if (oom_group)
+                         r = oomd_insert_cgroup_context(NULL, new_h, cg_path);
+@@ -180,6 +190,8 @@ static int recursively_get_cgroup_context(Hashmap *new_h, const char *path) {
+                         r = recursively_get_cgroup_context(new_h, cg_path);
+                 if (r == -ENOMEM)
+                         return r;
++                if (r < 0)
++                        log_debug_errno(r, "Failed to insert or recursively get from %s, ignoring: %m", cg_path);
+         } while ((r = cg_read_subgroup(d, &subpath)) > 0);
+ 
+         return 0;
+@@ -201,6 +213,8 @@ static int update_monitored_cgroup_contexts(Hashmap **monitored_cgroups) {
+                 r = oomd_insert_cgroup_context(*monitored_cgroups, new_base, ctx->path);
+                 if (r == -ENOMEM)
+                         return r;
++                if (r < 0 && !IN_SET(r, -EEXIST, -ENOENT))
++                        log_debug_errno(r, "Failed to insert context for %s, ignoring: %m", ctx->path);
+         }
+ 
+         hashmap_free(*monitored_cgroups);
+@@ -225,6 +239,8 @@ static int get_monitored_cgroup_contexts_candidates(Hashmap *monitored_cgroups,
+                 r = recursively_get_cgroup_context(candidates, ctx->path);
+                 if (r == -ENOMEM)
+                         return r;
++                if (r < 0)
++                        log_debug_errno(r, "Failed to recursively get contexts for %s, ignoring: %m", ctx->path);
+         }
+ 
+         *ret_candidates = TAKE_PTR(candidates);
+@@ -295,38 +311,44 @@ static int monitor_cgroup_contexts_handler(sd_event_source *s, uint64_t usec, vo
+         /* Reset timer */
+         r = sd_event_now(sd_event_source_get_event(s), CLOCK_MONOTONIC, &usec_now);
+         if (r < 0)
+-                return log_error_errno(r, "Failed to reset event timer");
++                return log_error_errno(r, "Failed to reset event timer: %m");
+ 
+         r = sd_event_source_set_time_relative(s, INTERVAL_USEC);
+         if (r < 0)
+-                return log_error_errno(r, "Failed to set relative time for timer");
++                return log_error_errno(r, "Failed to set relative time for timer: %m");
+ 
+         /* Reconnect if our connection dropped */
+         if (!m->varlink) {
+                 r = acquire_managed_oom_connect(m);
+                 if (r < 0)
+-                        return log_error_errno(r, "Failed to acquire varlink connection");
++                        return log_error_errno(r, "Failed to acquire varlink connection: %m");
+         }
+ 
+         /* Update the cgroups used for detection/action */
+         r = update_monitored_cgroup_contexts(&m->monitored_swap_cgroup_contexts);
+         if (r == -ENOMEM)
+-                return log_error_errno(r, "Failed to update monitored swap cgroup contexts");
++                return log_oom();
++        if (r < 0)
++                log_debug_errno(r, "Failed to update monitored swap cgroup contexts, ignoring: %m");
+ 
+         r = update_monitored_cgroup_contexts(&m->monitored_mem_pressure_cgroup_contexts);
+         if (r == -ENOMEM)
+-                return log_error_errno(r, "Failed to update monitored memory pressure cgroup contexts");
++                return log_oom();
++        if (r < 0)
++                log_debug_errno(r, "Failed to update monitored memory pressure cgroup contexts, ignoring: %m");
+ 
+         r = update_monitored_cgroup_contexts_candidates(
+                         m->monitored_mem_pressure_cgroup_contexts, &m->monitored_mem_pressure_cgroup_contexts_candidates);
+         if (r == -ENOMEM)
+-                return log_error_errno(r, "Failed to update monitored memory pressure candidate cgroup contexts");
++                return log_oom();
++        if (r < 0)
++                log_debug_errno(r, "Failed to update monitored memory pressure candidate cgroup contexts, ignoring: %m");
+ 
+         r = oomd_system_context_acquire("/proc/swaps", &m->system_context);
+         /* If there aren't units depending on swap actions, the only error we exit on is ENOMEM.
+          * Allow ENOENT in the event that swap is disabled on the system. */
+         if (r == -ENOMEM || (r < 0 && r != -ENOENT && !hashmap_isempty(m->monitored_swap_cgroup_contexts)))
+-                return log_error_errno(r, "Failed to acquire system context");
++                return log_error_errno(r, "Failed to acquire system context: %m");
+         else if (r == -ENOENT)
+                 zero(m->system_context);
+ 
+@@ -343,7 +365,9 @@ static int monitor_cgroup_contexts_handler(sd_event_source *s, uint64_t usec, vo
+ 
+         r = oomd_pressure_above(m->monitored_mem_pressure_cgroup_contexts, m->default_mem_pressure_duration_usec, &targets);
+         if (r == -ENOMEM)
+-                return log_error_errno(r, "Failed to check if memory pressure exceeded limits");
++                return log_oom();
++        if (r < 0)
++                log_debug_errno(r, "Failed to check if memory pressure exceeded limits, ignoring: %m");
+         else if (r == 1) {
+                 /* Check if there was reclaim activity in the given interval. The concern is the following case:
+                  * Pressure climbed, a lot of high-frequency pages were reclaimed, and we killed the offending
+@@ -359,9 +383,9 @@ static int monitor_cgroup_contexts_handler(sd_event_source *s, uint64_t usec, vo
+ 
+                                 r = oomd_kill_by_pgscan_rate(m->monitored_mem_pressure_cgroup_contexts_candidates, t->path, m->dry_run);
+                                 if (r == -ENOMEM)
+-                                        return log_error_errno(r, "Failed to kill cgroup processes by pgscan rate: %m");
++                                        return log_oom();
+                                 if (r < 0)
+-                                        log_info("Failed to kill any cgroup(s) under %s based on pressure", t->path);
++                                        log_notice_errno(r, "Failed to kill any cgroup(s) under %s based on pressure: %m", t->path);
+                                 else {
+                                         /* Don't act on all the high pressure cgroups at once; return as soon as we kill one */
+                                         m->post_action_delay_start = usec_now;
+@@ -379,13 +403,15 @@ static int monitor_cgroup_contexts_handler(sd_event_source *s, uint64_t usec, vo
+ 
+                 r = get_monitored_cgroup_contexts_candidates(m->monitored_swap_cgroup_contexts, &candidates);
+                 if (r == -ENOMEM)
+-                        return log_error_errno(r, "Failed to get monitored swap cgroup candidates");
++                        return log_oom();
++                if (r < 0)
++                        log_debug_errno(r, "Failed to get monitored swap cgroup candidates, ignoring: %m");
+ 
+                 r = oomd_kill_by_swap_usage(candidates, m->dry_run);
+                 if (r == -ENOMEM)
+-                        return log_error_errno(r, "Failed to kill cgroup processes by swap usage");
++                        return log_oom();
+                 if (r < 0)
+-                        log_info("Failed to kill any cgroup(s) based on swap");
++                        log_notice_errno(r, "Failed to kill any cgroup(s) based on swap: %m");
+                 else {
+                         m->post_action_delay_start = usec_now;
+                         return 0;
