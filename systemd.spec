@@ -939,6 +939,12 @@ if [ $1 -eq 0 ] ; then
 fi
 
 %post resolved
+# Related to https://bugzilla.redhat.com/show_bug.cgi?id=1943263
+if [ $1 -eq 1 ] && ls /usr/lib/systemd/libsystemd-shared-24[0-6].so &>/dev/null; then
+    echo "Skipping presets for systemd-resolved.service, seems we are upgrading from old systemd."
+else
+    %systemd_post systemd-resolved.service
+fi
 # Create /etc/resolv.conf symlink.
 # We would also create it using tmpfiles, but let's do this here
 # too before NetworkManager gets a chance. (systemd-tmpfiles invocation above
