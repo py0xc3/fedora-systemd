@@ -31,7 +31,7 @@ Name:           systemd
 Url:            https://www.freedesktop.org/wiki/Software/systemd
 %if %{without inplace}
 Version:        249
-Release:        2%{?dist}
+Release:        3%{?dist}
 %else
 # determine the build information from local checkout
 Version:        %(tools/meson-vcs-tag.sh . error | sed -r 's/-([0-9])/.^\1/; s/-g/_g/')
@@ -480,6 +480,7 @@ CONFIGURE_OPTS=(
         -Dversion-tag=v%{version}-%{release}
         -Dfallback-hostname=%[0%{?fedora}?"fedora":"localhost"]
         -Ddefault-dnssec=no
+        -Ddefault-dns-over-tls=opportunistic
         # https://bugzilla.redhat.com/show_bug.cgi?id=1867830
         -Ddefault-mdns=no
         -Ddefault-llmnr=resolve
@@ -995,6 +996,9 @@ fi
 %files standalone-sysusers -f .file-list-standalone-sysusers
 
 %changelog
+* Mon Jul 19 2021 Michael Catanzaro <mcatanzaro@redhat.com> - 249-3
+- Build with -Ddefault-dns-over-tls=opportunistic
+
 * Wed Jul  7 2021 Neal Gompa <ngompa13@gmail.com> - 249-2
 - Use correct NEWS URLs for systemd 249 releases in changelog entries
 
