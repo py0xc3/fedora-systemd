@@ -31,7 +31,7 @@ Name:           systemd
 Url:            https://www.freedesktop.org/wiki/Software/systemd
 %if %{without inplace}
 Version:        249.8
-Release:        1%{?dist}
+Release:        2%{?dist}
 %else
 # determine the build information from local checkout
 Version:        %(tools/meson-vcs-tag.sh . error | sed -r 's/-([0-9])/.^\1/; s/-g/_g/')
@@ -99,6 +99,7 @@ Patch0005:      0005-update-helper-also-add-user-reexec-verb.patch
 Patch0006:      0006-update-helper-add-missing-loop-over-user-units.patch
 
 Patch0007:      https://github.com/systemd/systemd/commit/2da7d0bc92.patch
+Patch0008:      https://patch-diff.githubusercontent.com/raw/systemd/systemd/pull/22094.patch
 
 # Downstream-only patches (5000–9999)
 # https://bugzilla.redhat.com/show_bug.cgi?id=1738828
@@ -1043,6 +1044,9 @@ fi
 %files standalone-sysusers -f .file-list-standalone-sysusers
 
 %changelog
+* Wed Jan 12 2022 Julian Sikorski <belegdol@fedoraproject.org> - 249.8-2
+- Fix parsing corrupted entries
+
 * Tue Jan 11 2022 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 249.8-1
 - Create /etc/resolv.conf symlink if nothing is present yet (#2032085)
 - Add missing requirements for libfido2 and libtss2 (#1975827)
