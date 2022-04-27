@@ -181,6 +181,10 @@ BuildRequires:  bpftool
 %global have_bpf 1
 %endif
 
+%ifarch %{efi}
+BuildRequires:  pesign
+%endif
+
 Requires(post): coreutils
 Requires(post): grep
 # systemd-machine-id-setup requires libssl
@@ -687,6 +691,12 @@ install -m 0644 -D -t %{buildroot}%{_rpmconfigdir}/macros.d/ %{SOURCE21}
 install -m 0644 -D -t %{buildroot}%{_rpmconfigdir}/fileattrs/ %{SOURCE22}
 install -m 0755 -D -t %{buildroot}%{_rpmconfigdir}/ %{SOURCE23}
 install -m 0755 -D -t %{buildroot}%{_rpmconfigdir}/ %{SOURCE24}
+
+%ifarch %{efi}
+pushd %{buildroot}%{_prefix}/lib/systemd/boot/efi
+%pesign -s -i systemd-boot%{efi_arch}.efi -o systemd-boot%{efi_arch}.efi.signed
+popd
+%endif
 
 %find_lang %{name}
 
