@@ -31,7 +31,7 @@ Name:           systemd
 Url:            https://www.freedesktop.org/wiki/Software/systemd
 %if %{without inplace}
 Version:        251.2
-Release:        2%{?dist}
+Release:        3%{?dist}
 %else
 # determine the build information from local checkout
 Version:        %(tools/meson-vcs-tag.sh . error | sed -r 's/-([0-9])/.^\1/; s/-g/_g/')
@@ -609,6 +609,10 @@ chmod 0664 %{buildroot}%{_localstatedir}/log/lastlog
 touch %{buildroot}/run/utmp
 touch %{buildroot}%{_localstatedir}/log/{w,b}tmp
 
+# Make sure the journald.conf.d directories are properly owned
+mkdir -p %{buildroot}%{_sysconfdir}/systemd/journald.conf.d/
+mkdir -p %{buildroot}%{_prefix}/lib/systemd/journald.conf.d/
+
 # Make sure the user generators dir exists too
 mkdir -p %{buildroot}%{pkgdir}/system-generators
 mkdir -p %{buildroot}%{pkgdir}/user-generators
@@ -1013,6 +1017,9 @@ fi
 %files standalone-sysusers -f .file-list-standalone-sysusers
 
 %changelog
+* Thu Jul 07 2022 Peter Robinson <pbrobinson@fedoraproject.org> - 251.2-3
+- Own journald.conf.d for journald config snippets
+
 * Wed Jun 29 2022 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 251.2-2
 - Drop forward-secure-sealing code from sd-journal and tools
 
