@@ -96,6 +96,9 @@ Patch0490:      use-bfq-scheduler.patch
 # Adjust upstream config to use our shared stack
 Patch0491:      fedora-use-system-auth-in-pam-systemd-user.patch
 
+# https://pagure.io/fedora-workstation/issue/163
+Patch0502:      default-timeout.patch
+
 %ifarch %{ix86} x86_64 aarch64
 %global have_gnu_efi 1
 %endif
