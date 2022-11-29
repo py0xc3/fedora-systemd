@@ -341,6 +341,20 @@ This package also provides systemd-timesyncd, a network time protocol daemon.
 It also contains tools to manage encrypted home areas and secrets bound to the
 machine, and to create or grow partitions and make file systems automatically.
 
+%if 0%{?have_gnu_efi}
+%package boot
+Summary: Tools for UEFI booting
+Requires:       %{name}%{?_isa} = %{version}-%{release}
+Requires(post):   systemd-udev
+Requires(preun):  systemd-udev
+Requires(postun): systemd-udev
+Obsoletes:      %{name} < 229-5
+License:        LGPLv2+
+
+%description boot
+Systemd-boot is a lightweight bootloader utilized on UEFI based machines.
+%endif
+
 %package container
 # Name is the same as in Debian
 Summary: Tools for containers and VMs
@@ -993,6 +1007,10 @@ fi
 %files devel -f .file-list-devel
 
 %files udev -f .file-list-udev
+
+%if 0%{?have_gnu_efi}
+%files boot -f .file-list-boot
+%endif
 
 %files container -f .file-list-container
 %ghost %dir %attr(0700,-,-) /var/lib/machines
