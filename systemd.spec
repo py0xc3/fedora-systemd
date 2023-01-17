@@ -357,6 +357,8 @@ Summary: UEFI boot manager (unsigned version)
 Provides: systemd-boot-unsigned-%{efi_arch} = %version-%release
 Provides: systemd-boot = %version-%release
 Provides: systemd-boot%{_isa} = %version-%release
+Conflicts: systemd-boot < %{version}-%{release}
+Obsoletes: systemd-boot < %{version}-%{release}
 
 # self-obsoletes to install both packages after split of systemd-boot
 Obsoletes:      systemd-udev < 252.2^
