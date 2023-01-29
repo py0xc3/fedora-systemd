@@ -1010,6 +1010,13 @@ fi
 %files standalone-sysusers -f .file-list-standalone-sysusers
 
 %changelog
+* Tue Dec 20 2022 Zbigniew Jedrzejewski-Szmek <zbyszek@in.waw.pl> - 250.9-1
+- Latest bugfix release with a bunch of fixes (homed, networkd, manager,
+  resolved, documentation): rhbz#2133792, rhbz#2135778, rhbz#2152685,
+  and also #2031810, #2121106.
+- CVE-2022-4415: systemd: coredump not respecting fs.suid_dumpable kernel
+  setting
+
 * Thu Jul 14 2022 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 250.8-1
 - Latest upstream bugfix version
 - Expose /usr/share/user-tmpfiles.d via pkgconfig (#2098553)
