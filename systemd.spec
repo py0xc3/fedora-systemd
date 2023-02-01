@@ -30,8 +30,8 @@
 Name:           systemd
 Url:            https://www.freedesktop.org/wiki/Software/systemd
 %if %{without inplace}
-Version:        250.9
-Release:        2%{?dist}
+Version:        250.10
+Release:        1%{?dist}
 %else
 # determine the build information from local checkout
 Version:        %(tools/meson-vcs-tag.sh . error | sed -r 's/-([0-9])/.^\1/; s/-g/_g/')
@@ -91,7 +91,7 @@ GIT_DIR=../../src/systemd/.git git diffab -M v233..master@{2017-06-15} -- hwdb/[
 # Any patches which are "in preparation" upstream should be listed here, rather
 # than in the next section. Packit CI will drop any patches in this range before
 # applying upstream pull requests.
-Patch0001:      0001-coredump-cescape-invalid-json-data-before-logging.patch
+
 
 # This is a downstream-only patch, but we don't want it in packit builds.
 # https://bugzilla.redhat.com/show_bug.cgi?id=1738828
@@ -1019,7 +1019,12 @@ fi
 %files standalone-sysusers -f .file-list-standalone-sysusers
 
 %changelog
-* Sun Jan 29 2023 Zbigniew Jedrzejewski-Szmek <zbyszek@in.waw.pl> - 250.9-2
+* Wed Feb  1 2023 Zbigniew Jedrzejewski-Szmek <zbyszek@in.waw.pl> - 250.10-1
+- Various small fixes (compilation fixes with new kernel headers, gcc,
+  -D_FORTIFY_SOURCE=3, allow swap endianness change, fixes to output and logs,
+  various fixlets in systemd-resolved, other small issues).
+
+* Sun Jan 29 2023 Zbigniew Jedrzejewski-Szmek <zbyszek@in.waw.pl> - 250.10-1
 - Do not touch /etc/resolv.conf on upgrades (#2074122)
 
 * Tue Dec 20 2022 Zbigniew Jedrzejewski-Szmek <zbyszek@in.waw.pl> - 250.9-1
