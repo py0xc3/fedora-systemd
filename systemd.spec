@@ -31,7 +31,7 @@ Name:           systemd
 Url:            https://www.freedesktop.org/wiki/Software/systemd
 %if %{without inplace}
 Version:        250.10
-Release:        1%{?dist}
+Release:        2%{?dist}
 %else
 # determine the build information from local checkout
 Version:        %(tools/meson-vcs-tag.sh . error | sed -r 's/-([0-9])/.^\1/; s/-g/_g/')
@@ -1020,6 +1020,9 @@ fi
 %files standalone-sysusers -f .file-list-standalone-sysusers
 
 %changelog
+* Thu Feb  2 2023 Zbigniew Jedrzejewski-Szmek <zbyszek@in.waw.pl> - 250.10-2
+- Revert one patch that is causing selinux troubles (#2166509 reported in F37)
+
 * Wed Feb  1 2023 Zbigniew Jedrzejewski-Szmek <zbyszek@in.waw.pl> - 250.10-1
 - Various small fixes (compilation fixes with new kernel headers, gcc,
   -D_FORTIFY_SOURCE=3, allow swap endianness change, fixes to output and logs,
