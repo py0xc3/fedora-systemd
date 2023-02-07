@@ -204,6 +204,8 @@ Provides:       %{name}-tmpfiles = %{version}-%{release}
 Conflicts:      %{name}-standalone-sysusers < %{version}-%{release}^
 Provides:       %{name}-sysusers = %{version}-%{release}
 
+Requires:       (selinux-policy-any >= 37.18-1.fc37 if selinux-policy-any)
+
 # Recommends to replace normal Requires deps for stuff that is dlopen()ed
 Recommends:     libidn2.so.0%{?elf_suffix}
 Recommends:     libidn2.so.0(IDN2_0.0.0)%{?elf_bits}
