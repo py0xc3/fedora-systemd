@@ -328,6 +328,9 @@ Requires:       kbd
 Provides:       u2f-hidraw-policy = 1.0.2-40
 Obsoletes:      u2f-hidraw-policy < 1.0.2-40
 
+# self-obsoletes to install both packages after split of systemd-boot
+Obsoletes:      systemd-udev < 251.13^
+
 %description udev
 This package contains systemd-udev and the rules and hardware database needed to
 manage device nodes. This package is necessary on physical machines and in
@@ -337,6 +340,31 @@ This package also provides systemd-timesyncd, a network time protocol daemon.
 
 It also contains tools to manage encrypted home areas and secrets bound to the
 machine, and to create or grow partitions and make file systems automatically.
+
+%if 0%{?have_gnu_efi}
+%package boot-unsigned
+Summary: UEFI boot manager (unsigned version)
+
+Provides: systemd-boot-unsigned-%{efi_arch} = %version-%release
+Provides: systemd-boot = %version-%release
+Provides: systemd-boot%{_isa} = %version-%release
+# A provides with just the version, no release or dist, used to build systemd-boot
+Provides: version(systemd-boot-unsigned) = %version
+Provides: version(systemd-boot-unsigned)%{_isa} = %version
+
+# self-obsoletes to install both packages after split of systemd-boot
+Obsoletes:      systemd-udev < 251.13^
+
+%description boot-unsigned
+systemd-boot (short: sd-boot) is a simple UEFI boot manager. It provides a
+graphical menu to select the entry to boot and an editor for the kernel command
+line. systemd-boot supports systems with UEFI firmware only.
+
+This package contains an unsigned version.
+
+This package also contains the systemd-stub (short: sd-stub) which is used to
+build Unified Kernel Images (UKIs).
+%endif
 
 %package container
 # Name is the same as in Debian
@@ -447,6 +475,9 @@ test -f src/login/systemd-user.in
 # Restore systemd-user pam config from before "removal of Fedora-specific bits".
 # We'll systemd process it and install in the right place.
 cp %{SOURCE12} src/login/systemd-user.in
+# We want to update sd-boot from packaging scriptlets after package update.
+# Let's disable the service.
+sed -r -i '/^enable systemd-boot-update.service/d' presets/90-systemd.preset
 
 %build
 %global ntpvendor %(source /etc/os-release; echo ${ID})
@@ -990,6 +1021,10 @@ fi
 %files devel -f .file-list-devel
 
 %files udev -f .file-list-udev
+
+%if 0%{?have_gnu_efi}
+%files boot-unsigned -f .file-list-boot
+%endif
 
 %files container -f .file-list-container
 %ghost %dir %attr(0700,-,-) /var/lib/machines
