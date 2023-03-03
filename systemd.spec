@@ -1,8 +1,6 @@
 #global commit c4b843473a75fb38ed5bf54e9d3cfb1cb3719efa
 %{?commit:%global shortcommit %(c=%{commit}; echo ${c:0:7})}
 
-%global stable 1
-
 # We ship a .pc file but don't want to have a dep on pkg-config. We
 # strip the automatically generated dep here and instead co-own the
 # directory.
@@ -28,7 +26,7 @@
 %bcond_with    inplace
 
 Name:           systemd
-Url:            https://www.freedesktop.org/wiki/Software/systemd
+Url:            https://systemd.io
 %if %{without inplace}
 Version:        251.13
 %else
@@ -37,8 +35,10 @@ Version:        %(tools/meson-vcs-tag.sh . error | sed -r 's/-([0-9])/.^\1/; s/-
 %endif
 Release:        %autorelease
 
+%global stable %(c="%version"; [ "$c" = "${c#*.*}" ]; echo $?)
+
 # For a breakdown of the licensing, see README
-License:        LGPLv2+ and MIT and GPLv2+
+License:        LGPL-2.1-or-later AND MIT AND GPL-2.0-or-later
 Summary:        System and Service Manager
 
 # download tarballs with "spectool -g systemd.spec"
@@ -181,7 +181,7 @@ Requires:       %{name}-libs = %{version}-%{release}
 %{?fedora:Recommends:     %{name}-resolved = %{version}-%{release}}
 Recommends:     diffutils
 Requires:       (util-linux-core or util-linux)
-Recommends:     libxkbcommon%{?_isa}
+Recommends:     libxkbcommon%{_isa}
 Provides:       /bin/systemctl
 Provides:       /sbin/shutdown
 Provides:       syslog
@@ -238,12 +238,12 @@ utilities to control basic system configuration like the hostname, date, locale,
 maintain a list of logged-in users, system accounts, runtime directories and
 settings, and a logging daemons.
 %if 0%{?stable}
-This package was built from the %{version}-stable branch of systemd.
+This package was built from the %(c=%version; echo "v${c%.*}-stable") branch of systemd.
 %endif
 
 %package libs
 Summary:        systemd libraries
-License:        LGPLv2+ and MIT
+License:        LGPL-2.1-or-later AND MIT
 Obsoletes:      libudev < 183
 Obsoletes:      systemd < 185-4
 Conflicts:      systemd < 185-4
@@ -275,8 +275,8 @@ for information how to use those macros.
 
 %package devel
 Summary:        Development headers for systemd
-License:        LGPLv2+ and MIT
-Requires:       %{name}-libs%{?_isa} = %{version}-%{release}
+License:        LGPL-2.1-or-later AND MIT
+Requires:       %{name}-libs%{_isa} = %{version}-%{release}
 Requires(meta): (%{name}-rpm-macros = %{version}-%{release} if rpm-build)
 Provides:       libudev-devel = %{version}
 Provides:       libudev-devel%{_isa} = %{version}
@@ -288,9 +288,9 @@ to libudev or libsystemd.
 
 %package udev
 Summary: Rule-based device node and kernel event manager
-License:        LGPLv2+
+License:        LGPL-2.1-or-later
 
-Requires:       systemd%{?_isa} = %{version}-%{release}
+Requires:       systemd%{_isa} = %{version}-%{release}
 Requires(post):   systemd
 Requires(preun):  systemd
 Requires(postun): systemd
@@ -341,7 +341,7 @@ machine, and to create or grow partitions and make file systems automatically.
 %package container
 # Name is the same as in Debian
 Summary: Tools for containers and VMs
-Requires:       %{name}%{?_isa} = %{version}-%{release}
+Requires:       %{name}%{_isa} = %{version}-%{release}
 Requires(post):   systemd
 Requires(preun):  systemd
 Requires(postun): systemd
@@ -349,7 +349,7 @@ Requires(postun): systemd
 Obsoletes:      %{name} < 229-5
 # Bias the system towards libcurl-minimal if nothing pulls in full libcurl (#1997040)
 Suggests:       libcurl-minimal
-License:        LGPLv2+
+License:        LGPL-2.1-or-later
 
 %description container
 Systemd tools to spawn and manage containers and virtual machines.
@@ -360,8 +360,8 @@ systemd-importd.
 %package journal-remote
 # Name is the same as in Debian
 Summary:        Tools to send journal events over the network
-Requires:       %{name}%{?_isa} = %{version}-%{release}
-License:        LGPLv2+
+Requires:       %{name}%{_isa} = %{version}-%{release}
+License:        LGPL-2.1-or-later
 Requires:       firewalld-filesystem
 Provides:       %{name}-journal-gateway = %{version}-%{release}
 Provides:       %{name}-journal-gateway%{_isa} = %{version}-%{release}
@@ -378,8 +378,8 @@ systemd-journal-upload.
 
 %package networkd
 Summary:        System daemon that manages network configurations
-Requires:       %{name}%{?_isa} = %{version}-%{release}
-License:        LGPLv2+
+Requires:       %{name}%{_isa} = %{version}-%{release}
+License:        LGPL-2.1-or-later
 # https://src.fedoraproject.org/rpms/systemd/pull-request/34
 Obsoletes:      systemd < 246.6-2
 
@@ -390,7 +390,7 @@ devices.
 
 %package resolved
 Summary:        Network Name Resolution manager
-Requires:       %{name}%{?_isa} = %{version}-%{release}
+Requires:       %{name}%{_isa} = %{version}-%{release}
 Obsoletes:      %{name} < 249~~
 Requires:       libidn2.so.0%{?elf_suffix}
 Requires:       libidn2.so.0(IDN2_0.0.0)%{?elf_bits}
@@ -404,7 +404,7 @@ resolver, as well as an LLMNR and MulticastDNS resolver and responder.
 %package oomd-defaults
 Summary:        Configuration files for systemd-oomd
 Requires:       %{name} = %{version}-%{release}
-License:        LGPLv2+
+License:        LGPL-2.1-or-later
 BuildArch:      noarch
 
 %description oomd-defaults
@@ -413,32 +413,32 @@ a userspace out-of-memory (OOM) killer.
 
 %package tests
 Summary:       Internal unit tests for systemd
-Requires:      %{name}%{?_isa} = %{version}-%{release}
-License:       LGPLv2+
+Requires:      %{name}%{_isa} = %{version}-%{release}
+License:       LGPL-2.1-or-later
 
 %description tests
 "Installed tests" that are usually run as part of the build system. They can be
 useful to test systemd internals.
 
 %package standalone-tmpfiles
-Summary:       Standalone tmpfiles binary for use in non-systemd systems
+Summary:       Standalone systemd-tmpfiles binary for use on systems without systemd
 Provides:      %{name}-tmpfiles = %{version}-%{release}
 RemovePathPostfixes: .standalone
 
 %description standalone-tmpfiles
-Standalone tmpfiles binary with no dependencies on the systemd-shared library or
+Standalone systemd-tmpfiles binary with no dependencies on the systemd-shared library or
 other libraries from systemd-libs. This package conflicts with the main systemd
-package and is meant for use in non-systemd systems.
+package and is meant for use on systems without systemd.
 
 %package standalone-sysusers
-Summary:       Standalone sysusers binary for use in non-systemd systems
+Summary:       Standalone systemd-sysusers binary for use on systems without systemd
 Provides:      %{name}-sysusers = %{version}-%{release}
 RemovePathPostfixes: .standalone
 
 %description standalone-sysusers
-Standalone sysusers binary with no dependencies on the systemd-shared library or
+Standalone systemd-sysusers binary with no dependencies on the systemd-shared library or
 other libraries from systemd-libs. This package conflicts with the main systemd
-package and is meant for use in non-systemd systems.
+package and is meant for use on systems without systemd.
 
 %prep
 %autosetup -n %{?commit:%{name}%{?stable:-stable}-%{commit}}%{!?commit:%{name}%{?stable:-stable}-%{version_no_tilde}} -p1
