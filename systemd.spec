@@ -329,7 +329,7 @@ Provides:       u2f-hidraw-policy = 1.0.2-40
 Obsoletes:      u2f-hidraw-policy < 1.0.2-40
 
 # self-obsoletes to install both packages after split of systemd-boot
-Obsoletes:      systemd-udev < 251.13^
+Obsoletes:      systemd-udev < 251.13
 
 %description udev
 This package contains systemd-udev and the rules and hardware database needed to
@@ -353,7 +353,7 @@ Provides: version(systemd-boot-unsigned) = %version
 Provides: version(systemd-boot-unsigned)%{_isa} = %version
 
 # self-obsoletes to install both packages after split of systemd-boot
-Obsoletes:      systemd-udev < 251.13^
+Obsoletes:      systemd-udev < 251.13
 
 %description boot-unsigned
 systemd-boot (short: sd-boot) is a simple UEFI boot manager. It provides a
