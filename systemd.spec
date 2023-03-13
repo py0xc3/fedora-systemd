@@ -329,7 +329,9 @@ Provides:       u2f-hidraw-policy = 1.0.2-40
 Obsoletes:      u2f-hidraw-policy < 1.0.2-40
 
 # https://bugzilla.redhat.com/show_bug.cgi?id=2176263
+%if 0%{?have_gnu_efi}
 Requires:       systemd-boot-unsigned%{_isa} = %version-%release
+%endif
 
 %description udev
 This package contains systemd-udev and the rules and hardware database needed to
