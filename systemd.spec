@@ -28,7 +28,7 @@
 Name:           systemd
 Url:            https://systemd.io
 %if %{without inplace}
-Version:        251.13
+Version:        251.14
 %else
 # determine the build information from local checkout
 Version:        %(tools/meson-vcs-tag.sh . error | sed -r 's/-([0-9])/.^\1/; s/-g/_g/')
