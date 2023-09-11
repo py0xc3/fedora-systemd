@@ -559,8 +559,6 @@ package and is meant for use in exitrds.
 # Let's disable the service.
 sed -r -i '/^enable systemd-boot-update.service/d' presets/90-systemd.preset
 
-sed -r 's|/system/|/user/|g' %{SOURCE16} >10-timeout-abort.conf.user
-
 %generate_buildrequires
 %if 0%{?have_gnu_efi}
 if grep -q gnu-efi meson_options.txt; then
@@ -707,6 +705,8 @@ if ! diff -u %{SOURCE1} ${new_triggers}; then
    echo -e "      cp $PWD/${new_triggers} %{SOURCE1}\n\n\n"
    sleep 5
 fi
+
+sed -r 's|/system/|/user/|g' %{SOURCE16} >10-timeout-abort.conf.user
 
 %install
 %meson_install
