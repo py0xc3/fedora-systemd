@@ -3,6 +3,7 @@
 /systemd-*/
 /.build-*.log
 /x86_64/
+/noarch/
 /systemd-*src.rpm
 /systemd-*.tar.xz
 /systemd-*.tar.gz
