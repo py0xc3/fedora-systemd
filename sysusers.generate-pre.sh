@@ -90,7 +90,11 @@ parse() {
 }
 
 for fn in "$@"; do
-	[ -e "$fn" ] || continue
-	echo "# generated from $(basename "$fn")"
-	parse <"$fn"
+	if [ -e "$fn" ]; then
+		echo "# Generated from $(basename "$fn")"
+		parse <"$fn"
+	else
+		echo "# Generated from inline config"
+		echo "$fn" | parse
+	fi
 done
