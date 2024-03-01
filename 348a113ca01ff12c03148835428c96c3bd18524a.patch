@@ -1,0 +1,25 @@
+From 348a113ca01ff12c03148835428c96c3bd18524a Mon Sep 17 00:00:00 2001
+From: Luca Boccassi <bluca@debian.org>
+Date: Wed, 28 Feb 2024 00:52:36 +0000
+Subject: [PATCH] systemctl: fix fallback for pidfd_open permission error
+
+Follow-up for 857945cc5f2a4c1d6aa0bd7532a995c8480b1cc3
+
+(cherry picked from commit 276a254c208fcaea6e00ba353b4d73ad6a75d8da)
+---
+ src/systemctl/systemctl-show.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/systemctl/systemctl-show.c b/src/systemctl/systemctl-show.c
+index ce2f6f6db3..ea9dd83fd8 100644
+--- a/src/systemctl/systemctl-show.c
++++ b/src/systemctl/systemctl-show.c
+@@ -2210,7 +2210,7 @@ static int get_unit_dbus_path_by_pid(
+          * sends the numeric PID. */
+ 
+         pidfd = pidfd_open(pid, 0);
+-        if (pidfd < 0 && ERRNO_IS_NOT_SUPPORTED(errno) && !ERRNO_IS_PRIVILEGE(errno))
++        if (pidfd < 0 && (ERRNO_IS_NOT_SUPPORTED(errno) || ERRNO_IS_PRIVILEGE(errno)))
+                 return get_unit_dbus_path_by_pid_fallback(bus, pid, ret_path, ret_unit);
+         if (pidfd < 0)
+                 return log_error_errno(errno, "Failed to open PID %"PRIu32": %m", pid);
