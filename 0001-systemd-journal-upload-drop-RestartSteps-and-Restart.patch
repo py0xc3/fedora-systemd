@@ -1,0 +1,27 @@
+From e4f1fb16aeda475a0cb27535abf0bfa24e9fb0d8 Mon Sep 17 00:00:00 2001
+From: Luca Boccassi <bluca@debian.org>
+Date: Thu, 29 Feb 2024 14:40:33 +0000
+Subject: [PATCH] systemd-journal-upload: drop RestartSteps= and
+ RestartMaxDelaySec=
+
+They are not available in this release, and were backported by mistake together with
+Restart=on-failure.
+
+Follow-up for 3ac88345598003c6f5b53c0dc5cf3e4f80e371bc
+---
+ units/systemd-journal-upload.service.in | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/units/systemd-journal-upload.service.in b/units/systemd-journal-upload.service.in
+index 7e64870e9d..18365a86a3 100644
+--- a/units/systemd-journal-upload.service.in
++++ b/units/systemd-journal-upload.service.in
+@@ -27,8 +27,6 @@ ProtectKernelLogs=yes
+ ProtectKernelModules=yes
+ ProtectKernelTunables=yes
+ Restart=on-failure
+-RestartSteps=10
+-RestartMaxDelaySec=60
+ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ RestrictNamespaces=yes
+ RestrictRealtime=yes

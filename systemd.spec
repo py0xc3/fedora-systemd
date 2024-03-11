@@ -35,7 +35,7 @@
 Name:           systemd
 Url:            https://systemd.io
 %if %{without inplace}
-Version:        253.15
+Version:        253.17
 %else
 # determine the build information from local checkout
 Version:        %(tools/meson-vcs-tag.sh . error | sed -r 's/-([0-9])/.^\1/; s/-g/_g/')
@@ -101,6 +101,9 @@ GIT_DIR=../../src/systemd/.git git diffab -M v233..master@{2017-06-15} -- hwdb/[
 # https://github.com/systemd/systemd/issues/26488
 # https://bugzilla.redhat.com/show_bug.cgi?id=2164404
 Patch0001:      https://github.com/systemd/systemd/pull/26494.patch
+
+# Fixup patch from v253-stable branch that went in after the tag
+Patch0002:      0001-systemd-journal-upload-drop-RestartSteps-and-Restart.patch
 
 
 # Those are downstream-only patches, but we don't want them in packit builds:
