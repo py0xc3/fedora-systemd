@@ -35,7 +35,7 @@
 Name:           systemd
 Url:            https://systemd.io
 %if %{without inplace}
-Version:        254.10
+Version:        254.12
 %else
 # determine the build information from local checkout
 Version:        %(tools/meson-vcs-tag.sh . error | sed -r 's/-([0-9])/.^\1/; s/-g/_g/')
@@ -119,10 +119,6 @@ Patch0006:      0001-keyboard-model-map-correct-sk-qwerty-entry.patch
 Patch0010:      0001-core-add-new-PollLimit-settings-to-.socket-units.patch
 Patch0011:      0002-man-document-the-new-PollLimitIntervalSec-PollLimitB.patch
 Patch0012:      0003-ci-add-test-for-poll-limit.patch
-
-# Yet-untagged patches from v254-stable
-Patch0100:      https://github.com/systemd/systemd-stable/commit/a3f3d470abf174217597d7a06c188f10300f7f4a.patch
-Patch0101:      https://github.com/systemd/systemd-stable/commit/348a113ca01ff12c03148835428c96c3bd18524a.patch
 
 # Those are downstream-only patches, but we don't want them in packit builds:
 # https://bugzilla.redhat.com/show_bug.cgi?id=1738828
