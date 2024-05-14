@@ -450,7 +450,8 @@ machine, and to create or grow partitions and make file systems automatically.
 Summary:        Tool to build Unified Kernel Images
 Requires:       %{name} = %{version}-%{release}
 
-Requires:       systemd-boot
+# This condition is needed since ukify is noarch and systemd-boot is arch-specific
+Requires:       %[%{?want_bootloader}?"systemd-boot":""]
 Requires:       python3dist(pefile)
 Requires:       python3dist(zstd)
 Requires:       python3dist(cryptography)
