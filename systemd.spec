@@ -32,12 +32,16 @@
 # Build from git main
 %bcond upstream  0
 
+# Override %%autorelease. This is ugly, but rpmautospec doesn't implement
+# autorelease correctly if the macro is conditionalized in the Release field.
+%{?release_override:%global autorelease %{release_override}%{?dist}}
+
 Name:           systemd
 Url:            https://systemd.io
 # Allow users to specify the version and release when building the rpm by 
 # setting the %%version_override and %%release_override macros.
 Version:        %{?version_override}%{!?version_override:255.10}
-Release:        %{?release_override:%{release_override}%{?dist}}%{!?release_override:%autorelease}
+Release:        %autorelease
 
 %global stable %(c="%version"; [ "$c" = "${c#*.*}" ]; echo $?)
 
