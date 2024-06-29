@@ -1,0 +1,52 @@
+From 1f459f3a45452a6a7c48c6ce3bd0d4f4aefee371 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Fri, 12 Jan 2024 15:37:15 +0100
+Subject: [PATCH] vmspawn: make sure are fine with ovmf metadata extensions
+
+The JSON ovmf data on Fedora at least has more fields than we expect,
+ignore it.
+---
+ src/vmspawn/vmspawn-util.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/vmspawn/vmspawn-util.c b/src/vmspawn/vmspawn-util.c
+index b5b5eafae6d0c..6270b7ffae7f5 100644
+--- a/src/vmspawn/vmspawn-util.c
++++ b/src/vmspawn/vmspawn-util.c
+@@ -100,7 +100,7 @@ static int firmware_executable(const char *name, JsonVariant *v, JsonDispatchFla
+                 {}
+         };
+ 
+-        return json_dispatch(v, table, 0, userdata);
++        return json_dispatch(v, table, flags, userdata);
+ }
+ 
+ static int firmware_nvram_template(const char *name, JsonVariant *v, JsonDispatchFlags flags, void *userdata) {
+@@ -110,7 +110,7 @@ static int firmware_nvram_template(const char *name, JsonVariant *v, JsonDispatc
+                 {}
+         };
+ 
+-        return json_dispatch(v, table, 0, userdata);
++        return json_dispatch(v, table, flags, userdata);
+ }
+ 
+ static int firmware_mapping(const char *name, JsonVariant *v, JsonDispatchFlags flags, void *userdata) {
+@@ -121,7 +121,7 @@ static int firmware_mapping(const char *name, JsonVariant *v, JsonDispatchFlags
+                 {}
+         };
+ 
+-        return json_dispatch(v, table, 0, userdata);
++        return json_dispatch(v, table, flags, userdata);
+ }
+ 
+ int find_ovmf_config(int search_sb, OvmfConfig **ret) {
+@@ -183,7 +183,7 @@ int find_ovmf_config(int search_sb, OvmfConfig **ret) {
+                 if (!fwd)
+                         return -ENOMEM;
+ 
+-                r = json_dispatch(config_json, table, 0, fwd);
++                r = json_dispatch(config_json, table, JSON_ALLOW_EXTENSIONS, fwd);
+                 if (r == -ENOMEM)
+                         return r;
+                 if (r < 0) {
+

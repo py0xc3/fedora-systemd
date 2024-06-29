@@ -97,6 +97,10 @@ GIT_DIR=../../src/systemd/.git git diffab -M v233..master@{2017-06-15} -- hwdb/[
 # than in the next section. Packit CI will drop any patches in this range before
 # applying upstream pull requests.
 
+# Fix systemd-vmspawn not being able to understand Fedora's OVMF config
+# https://bugzilla.redhat.com/show_bug.cgi?id=2294768
+Patch0000:      https://github.com/systemd/systemd/pull/30991.patch
+
 %if %{without upstream}
 
 # Those are downstream-only patches, but we don't want them in packit builds:
