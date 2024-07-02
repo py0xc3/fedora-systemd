@@ -231,6 +231,7 @@ BuildRequires:  valgrind-devel
 %ifnarch %ix86
 # bpftool is not built for i368
 BuildRequires:  bpftool
+BuildRequires:  kernel-devel
 %global have_bpf 1
 %endif
 
@@ -669,6 +670,18 @@ package and is meant for use in exitrds.
 %global ntpvendor %(source /etc/os-release; echo ${ID})
 %{!?ntpvendor: echo 'NTP vendor zone is not set!'; exit 1}
 
+# Bash globs are sorted alphabetically so we don't have to do it ourselves.
+VMLINUX_H=""
+%if 0%{?have_bpf}
+# The build fails on ppc64le with
+# "GCC error "Must specify a BPF target arch via __TARGET_ARCH_xxx".
+# TODO: Remove this when libbpf checks for __powerpc64__ macro.
+%ifnarch ppc64le
+VMLINUX_H=( /usr/src/kernels/*/vmlinux.h )
+VMLINUX_H="${VMLINUX_H[-1]}"
+%endif
+%endif
+
 CONFIGURE_OPTS=(
         -Dmode=%[%{with upstream}?"developer":"release"]
         -Dsysvinit-path=/etc/rc.d/init.d
@@ -686,6 +699,8 @@ CONFIGURE_OPTS=(
         -Dima=true
         -Dselinux=enabled
         -Dbpf-framework=%[0%{?have_bpf}?"enabled":"disabled"]
+        -Dvmlinux-h=%[0%{?have_bpf}?"provided":"disabled"]
+        -Dvmlinux-h-path=%[0%{?have_bpf}?"$VMLINUX_H":""]
         -Dapparmor=disabled
         -Dpolkit=enabled
         -Dxz=%[%{with xz}?"enabled":"disabled"]
