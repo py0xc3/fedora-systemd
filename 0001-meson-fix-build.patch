@@ -1,0 +1,23 @@
+From 5f131f40158c531e2ffef8e6c6e08073a9b8ed2c Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Mon, 5 Aug 2024 13:37:11 +0200
+Subject: [PATCH] meson: fix build
+
+Fixup for incorrect backport in c4ddf5d5dcb0c95ce930fa533ac81eaf5307be47.
+---
+ src/core/meson.build | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/core/meson.build b/src/core/meson.build
+index 65e39cb43f..439a88c5b2 100644
+--- a/src/core/meson.build
++++ b/src/core/meson.build
+@@ -162,7 +162,7 @@ executor_libs = get_option('link-executor-shared') ? \
+         ] : [
+                 libcore_static,
+                 libshared_static,
+-                libbasic_static,
++                libbasic,
+                 libsystemd_static,
+         ]
+ 

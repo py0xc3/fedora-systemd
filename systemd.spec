@@ -98,6 +98,9 @@ GIT_DIR=../../src/systemd/.git git diffab -M v233..master@{2017-06-15} -- hwdb/[
 # applying upstream pull requests.
 
 %if %{without upstream}
+# Fix build
+Patch0001:      0001-meson-fix-build.patch
+
 # Requested in https://bugzilla.redhat.com/show_bug.cgi?id=2298422
 Patch0011:      https://github.com/systemd/systemd/pull/33738.patch
 
@@ -711,6 +714,7 @@ CONFIGURE_OPTS=(
         -Dversion-tag=%{version}%[%{without upstream}?"-%{release}":""]
         # https://bugzilla.redhat.com/show_bug.cgi?id=1906010
         -Dshared-lib-tag=%{version_no_tilde}%[%{without upstream}?"-%{release}":""]
+        -Dlink-executor-shared=false
         -Dfallback-hostname="localhost"
         -Ddefault-dnssec=no
         -Ddefault-dns-over-tls=no
