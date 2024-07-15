@@ -253,11 +253,11 @@ Conflicts:      dracut < 060
 
 Obsoletes:      timedatex < 0.6-3
 Provides:       timedatex = 0.6-3
-Conflicts:      %{name}-standalone-tmpfiles < %{version}-%{release}^
+Conflicts:      %{name}-standalone-tmpfiles
 Provides:       %{name}-tmpfiles = %{version}-%{release}
-Conflicts:      %{name}-standalone-sysusers < %{version}-%{release}^
+Conflicts:      %{name}-standalone-sysusers
 Provides:       %{name}-sysusers = %{version}-%{release}
-Conflicts:      %{name}-standalone-shutdown < %{version}-%{release}^
+Conflicts:      %{name}-standalone-shutdown
 Provides:       %{name}-shutdown = %{version}-%{release}
 
 %if "%{_sbindir}" == "%{_bindir}"
@@ -424,7 +424,7 @@ Obsoletes:      u2f-hidraw-policy < 1.0.2-40
 # self-obsoletes to install both packages after split of systemd-boot
 Obsoletes:      systemd-udev < 252.2^
 
-Conflicts:      %{name}-standalone-repart < %{version}-%{release}^
+Conflicts:      %{name}-standalone-repart
 Provides:       %{name}-repart = %{version}-%{release}
 
 %if "%{_sbindir}" == "%{_bindir}"
@@ -592,6 +592,7 @@ useful to test systemd internals.
 %package standalone-repart
 Summary:       Standalone systemd-repart binary for use on systems without systemd
 Provides:      %{name}-repart = %{version}-%{release}
+Conflicts:     %{name}-udev
 RemovePathPostfixes: .standalone
 
 %description standalone-repart
@@ -602,6 +603,7 @@ package and is meant for use on systems without systemd.
 %package standalone-tmpfiles
 Summary:       Standalone systemd-tmpfiles binary for use on systems without systemd
 Provides:      %{name}-tmpfiles = %{version}-%{release}
+Conflicts:     %{name}
 RemovePathPostfixes: .standalone
 
 %description standalone-tmpfiles
@@ -612,6 +614,7 @@ package and is meant for use on systems without systemd.
 %package standalone-sysusers
 Summary:       Standalone systemd-sysusers binary for use on systems without systemd
 Provides:      %{name}-sysusers = %{version}-%{release}
+Conflicts:     %{name}
 RemovePathPostfixes: .standalone
 
 %description standalone-sysusers
@@ -622,6 +625,7 @@ package and is meant for use on systems without systemd.
 %package standalone-shutdown
 Summary:       Standalone systemd-shutdown binary for use on systems without systemd
 Provides:      %{name}-shutdown = %{version}-%{release}
+Conflicts:     %{name}
 RemovePathPostfixes: .standalone
 
 %description standalone-shutdown
