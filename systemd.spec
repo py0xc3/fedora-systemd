@@ -98,6 +98,8 @@ GIT_DIR=../../src/systemd/.git git diffab -M v233..master@{2017-06-15} -- hwdb/[
 # applying upstream pull requests.
 
 %if %{without upstream}
+# Requested in https://bugzilla.redhat.com/show_bug.cgi?id=2298422
+Patch0011:      https://github.com/systemd/systemd/pull/33738.patch
 
 # Those are downstream-only patches, but we don't want them in packit builds:
 # https://bugzilla.redhat.com/show_bug.cgi?id=1738828
