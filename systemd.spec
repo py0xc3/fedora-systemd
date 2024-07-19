@@ -1,4 +1,4 @@
-#global commit 1781de18ab8ebc3e42a607851d8effb3b0355c87
+%global commit 0009ed8ee160efd4fbdb8d8bccb9ca4366e5cc85
 %{?commit:%global shortcommit %(c=%{commit}; echo ${c:0:7})}
 
 # We ship a .pc file but don't want to have a dep on pkg-config. We
@@ -117,10 +117,6 @@ Patch0010:      https://github.com/systemd/systemd/pull/26494.patch
 
 # Requested in https://bugzilla.redhat.com/show_bug.cgi?id=2298422
 Patch0011:      https://github.com/systemd/systemd/pull/33738.patch
-
-Patch0020:      0001-meson-rename-libbasic-to-libbasic_static.patch
-Patch0021:      0002-meson-build-libsystemd-core-via-an-intermediate-stat.patch
-Patch0022:      0003-meson-add-option-to-build-systemd-executor-staticall.patch
 
 # Those are downstream-only patches, but we don't want them in packit builds:
 # https://bugzilla.redhat.com/show_bug.cgi?id=1738828
