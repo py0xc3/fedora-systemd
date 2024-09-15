@@ -124,8 +124,12 @@ Patch0012:      0003-ci-add-test-for-poll-limit.patch
 # https://bugzilla.redhat.com/show_bug.cgi?id=1738828
 Patch0490:      use-bfq-scheduler.patch
 
+# https://bugzilla.redhat.com/show_bug.cgi?id=2251843
+# https://github.com/systemd/systemd/pull/30846
+Patch0491:      0001-journal-again-create-user-journals-for-users-with-hi.patch
+
 # Adjust upstream config to use our shared stack
-Patch0491:      fedora-use-system-auth-in-pam-systemd-user.patch
+Patch0492:      fedora-use-system-auth-in-pam-systemd-user.patch
 
 %ifarch %{ix86} x86_64 aarch64
 %global have_gnu_efi 1
