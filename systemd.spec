@@ -592,8 +592,8 @@ Requires:      python3dist(psutil)
 License:       LGPL-2.1-or-later
 
 %description tests
-"Installed tests" that are usually run as part of the build system. They can be
-useful to test systemd internals.
+Systemd unit tests used to test the internal implementation after a build.
+Different binaries test different parts of the codebase.
 
 %package standalone-repart
 Summary:       Standalone systemd-repart binary for use on systems without systemd
@@ -603,9 +603,9 @@ Suggests:      coreutils-single
 RemovePathPostfixes: .standalone
 
 %description standalone-repart
-Standalone systemd-repart binary with no dependencies on the systemd-shared library or
-other libraries from systemd-libs. This package conflicts with the main systemd
-package and is meant for use on systems without systemd.
+Standalone systemd-repart binary with no dependencies on the systemd-shared
+library or other libraries from systemd-libs. This package conflicts with the
+main systemd package and is meant for use on systems without systemd.
 
 %package standalone-tmpfiles
 Summary:       Standalone systemd-tmpfiles binary for use on systems without systemd
@@ -615,9 +615,9 @@ Suggests:      coreutils-single
 RemovePathPostfixes: .standalone
 
 %description standalone-tmpfiles
-Standalone systemd-tmpfiles binary with no dependencies on the systemd-shared library or
-other libraries from systemd-libs. This package conflicts with the main systemd
-package and is meant for use on systems without systemd.
+Standalone systemd-tmpfiles binary with no dependencies on the systemd-shared
+library or other libraries from systemd-libs. This package conflicts with the
+main systemd package and is meant for use on systems without systemd.
 
 %package standalone-sysusers
 Summary:       Standalone systemd-sysusers binary for use on systems without systemd
@@ -627,21 +627,21 @@ Suggests:      coreutils-single
 RemovePathPostfixes: .standalone
 
 %description standalone-sysusers
-Standalone systemd-sysusers binary with no dependencies on the systemd-shared library or
-other libraries from systemd-libs. This package conflicts with the main systemd
-package and is meant for use on systems without systemd.
+Standalone systemd-sysusers binary with no dependencies on the systemd-shared
+library or other libraries from systemd-libs. This package conflicts with the
+main systemd package and is meant for use on systems without systemd.
 
 %package standalone-shutdown
-Summary:       Standalone systemd-shutdown binary for use on systems without systemd
+Summary:       Standalone systemd-shutdown binary for use in exitrds
 Provides:      %{name}-shutdown = %{version}-%{release}
 Conflicts:     %{name}
 Suggests:      coreutils-single
 RemovePathPostfixes: .standalone
 
 %description standalone-shutdown
-Standalone systemd-shutdown binary with no dependencies on the systemd-shared library or
-other libraries from systemd-libs. This package conflicts with the main systemd
-package and is meant for use in exitrds.
+Standalone systemd-shutdown binary with no dependencies on the systemd-shared
+library or other libraries from systemd-libs. This package conflicts with the
+main systemd package and is meant for use in exitrds.
 
 %prep
 %autosetup -n %{?commit:%{name}%[%stable?"-stable":""]-%{commit}}%{!?commit:%{name}%[%stable?"-stable":""]-%{version_no_tilde}} -p1
