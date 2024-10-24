@@ -1198,10 +1198,8 @@ fi
 %systemd_post systemd-resolved.service
 
 %preun resolved
+%systemd_preun systemd-resolved.service
 if [ $1 -eq 0 ] ; then
-        systemctl disable --quiet \
-                systemd-resolved.service \
-                >/dev/null || :
         if [ -L /etc/resolv.conf ] && \
             realpath /etc/resolv.conf | grep ^/run/systemd/resolve/; then
                 rm -f /etc/resolv.conf # no longer useful
