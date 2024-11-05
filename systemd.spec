@@ -45,7 +45,7 @@
 
 Name:           systemd
 Url:            https://systemd.io
-# Allow users to specify the version and release when building the rpm by 
+# Allow users to specify the version and release when building the rpm by
 # setting the %%version_override and %%release_override macros.
 Version:        %{?version_override}%{!?version_override:256.7}
 Release:        %autorelease
@@ -1039,6 +1039,18 @@ meson test -C %{_vpath_builddir} -t 6 --print-errorlogs
 
 %include %{SOURCE1}
 
+# This macro is newly added upstream so we can't rely on it being always being available
+# in the systemd-rpm-macros yet so we define it ourselves.
+%global systemd_posttrans_with_restart() \
+%{expand:%%{?__systemd_someargs_%#:%%__systemd_someargs_%# systemd_posttrans_with_restart}} \
+if [ $1 -ge 2 ] && [ -x "/usr/lib/systemd/systemd-update-helper" ]; then \
+  # Package upgrade, not install \
+  /usr/lib/systemd/systemd-update-helper mark-restart-system-units %* || : \
+fi \
+%{nil}
+
+%define systemd_rpmstatedir %{_localstatedir}/lib/rpm-state/systemd
+
 %post
 systemd-machine-id-setup &>/dev/null || :
 
@@ -1062,7 +1074,38 @@ systemd-tmpfiles --create &>/dev/null || :
 systemctl preset-all &>/dev/null || :
 systemctl --global preset-all &>/dev/null || :
 
+%pre
+[ -w %{_localstatedir} ] && mkdir -p %{systemd_rpmstatedir} && touch %{systemd_rpmstatedir}/reexec-required || :
+
+%posttrans
+[ -w %{systemd_rpmstatedir} ] && [ ! -f %{systemd_rpmstatedir}/reexec-required ] && exit 0 || :
+
+[ -w %{systemd_rpmstatedir} ] && rm -f %{systemd_rpmstatedir}/reexec-required || :
+
+if [ $1 -ge 1 ]; then
+  [ -w %{_localstatedir} ] && journalctl --update-catalog || :
+
+  systemctl daemon-reexec || :
+
+  systemd-tmpfiles --create &>/dev/null || :
+fi
+
+%systemd_posttrans_with_restart systemd-timedated.service systemd-hostnamed.service systemd-journald.service systemd-localed.service systemd-userdbd.service
+
+# FIXME: systemd-logind.service is excluded (https://github.com/systemd/systemd/pull/17558)
+
+# This is the expanded form of %%systemd_user_daemon_reexec. We
+# can't use the macro because we define it ourselves.
+if [ $1 -ge 1 ] && [ -x "/usr/lib/systemd/systemd-update-helper" ]; then
+    # Package upgrade, not uninstall
+    /usr/lib/systemd/systemd-update-helper user-reexec || :
+fi
+
 %postun
+[ -w %{systemd_rpmstatedir} ] && [ ! -f %{systemd_rpmstatedir}/reexec-required ] && exit 0 || :
+
+[ -w %{systemd_rpmstatedir} ] && rm -f %{systemd_rpmstatedir}/reexec-required || :
+
 if [ $1 -ge 1 ]; then
   [ -w %{_localstatedir} ] && journalctl --update-catalog || :
 
