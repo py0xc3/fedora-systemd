@@ -1,0 +1,16 @@
+diff -up systemd-256.10/src/core/taint.c.unmerged-bin systemd-256.10/src/core/taint.c
+--- systemd-256.10/src/core/taint.c.unmerged-bin	2024-12-20 12:47:26.000000000 -0700
++++ systemd-256.10/src/core/taint.c	2025-01-04 12:12:51.478892350 -0700
+@@ -45,10 +45,10 @@ char* taint_string(void) {
+                 stage[n++] = "unmerged-usr";
+ 
+         /* Note that the check is different from default_PATH(), as we want to taint on uncanonical symlinks
+-         * too. */
++         * too.
+         if (readlink_malloc("/usr/sbin", &usr_sbin) < 0 || !PATH_IN_SET(usr_sbin, "bin", "/usr/bin"))
+                 stage[n++] = "unmerged-bin";
+-
++         */
+         if (readlink_malloc("/var/run", &var_run) < 0 || !PATH_IN_SET(var_run, "../run", "/run"))
+                 stage[n++] = "var-run-bad";
+ 

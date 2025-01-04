@@ -124,6 +124,9 @@ Patch0491:      https://github.com/systemd/systemd/pull/30846.patch
 # Soft-disable tmpfiles --purge until a good use case comes up.
 Patch0492:      0001-tmpfiles-make-purge-hard-to-mis-use.patch
 
+# Remove the unmerged-bin taint for F41, this will be done in F42
+Patch0500:      systemd-unmerged-bin.patch
+
 %ifarch %{ix86} x86_64 aarch64 riscv64
 %global want_bootloader 1
 %endif
