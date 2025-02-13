@@ -137,10 +137,20 @@ for file in files(buildroot):
 
     elif re.search(r'''mymachines|
                        machinectl|
+                       importctl|
+                       portablectl|
                        systemd-nspawn|
+                       systemd\.nspawn|
                        systemd-vmspawn|
+                       systemd-dissect|
                        import-pubring.gpg|
-                       systemd-(machined|import|pull)|
+                       systemd-machined|
+                       systemd-import|
+                       systemd-export|
+                       systemd-pull|
+                       systemd-mountfsd|
+                       systemd-mountwork|
+                       systemd-nsresource|
                        /machine.slice|
                        /machines.target|
                        var-lib-machines.mount|
@@ -173,6 +183,7 @@ for file in files(buildroot):
 
     elif re.search(r'''udev(?!\.pc)|
                        hwdb|
+                       ac-power|
                        bootctl|
                        boot-update|
                        bless-boot|
