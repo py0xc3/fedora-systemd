@@ -47,7 +47,7 @@ Name:           systemd
 Url:            https://systemd.io
 # Allow users to specify the version and release when building the rpm by 
 # setting the %%version_override and %%release_override macros.
-Version:        %{?version_override}%{!?version_override:256.11}
+Version:        %{?version_override}%{!?version_override:256.12}
 Release:        %autorelease
 
 %global stable %(c="%version"; [ "$c" = "${c#*.*}" ]; echo $?)
@@ -498,7 +498,7 @@ Requires:       (systemd-boot if %{shrink:(
 )})
 Requires:       python3dist(pefile)
 %if 0%{?fedora}
-Requires:       python3dist(zstd)
+Requires:       python3dist(zstandard)
 %endif
 Requires:       python3dist(cryptography)
 %if 0%{?fedora}
