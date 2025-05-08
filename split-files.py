@@ -149,6 +149,7 @@ for file in files(buildroot):
 
     elif re.search(r'''mymachines|
                        machinectl|
+                       mount.ddi|
                        importctl|
                        portablectl|
                        systemd-nspawn|
