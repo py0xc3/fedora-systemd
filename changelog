@@ -1,3 +1,134 @@
+* Thu May 29 2025 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 256.15-1
+- Version 256.15
+- Fix for local information disclosure in systemd-coredump (CVE-2025-4598)
+- Various other fixes
+
+* Thu May 15 2025 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 256.13-1
+- Version 256.13
+- Various small fixes in multiple components
+
+* Fri Mar 07 2025 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 256.12-1
+- Version 256.12
+- Fixes for systemd itself, sd-boot, systemd-resolved, systemd-id128,
+  systemd-networkd, systemd-logind, systemd-tmpfiles, systemd-vmspawn,
+  systemd-userdb, udev, ukify, systemctl, homectl, fido2 code,
+  virtualization detection, internal shared library, shell completions,
+  documentation.
+- Hardware database is updated
+- Adds new DNSSEC anchor key for systemd-resolved
+- Adds new Fedora keys for systemd-importd
+- Adds a Georgian mapping to the keymap list
+
+* Fri Mar 07 2025 Daan De Meyer <daan.j.demeyer@gmail.com> - 256.11-4
+- Make sure we pull in libbpf >= 2:1.4.7 if libbpf is installed
+
+* Fri Mar 07 2025 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 256.11-2
+- Move some files into subpackages
+- systemd-ac-power is moved to systemd-udev
+- portablectl and importctl are moved to systemd-container (rhbz#2345551)
+
+* Wed Jan 08 2025 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 256.11-1
+- Version 256.11
+- Fixes for assertion crashes and memory access issues in pid1 and systemd-
+  machined, and other fixes for systemd-repart, systemd-resolved, systemd-
+  stdio-bridge, sd-device, hibernation, and the hardware database.
+
+* Sat Jan 04 2025 Orion Poplawski <orion@nwra.com> - 256.10-2
+- Disable unmerged-bin taint for F41 (rhbz#2334525)
+
+* Sat Dec 21 2024 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 256.10-1
+- Version 256.10
+- Fixes for man pages, shell completion, logging, systemd-networkd,
+  systemd-resolved, systemctl edit.
+
+* Tue Dec 03 2024 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 256.9-3
+- Recommend qemu-kvm-core instead of qemu-kvm (rhbz#2329979)
+
+* Fri Nov 29 2024 David Tardon <dtardon@redhat.com> - 256.9-2
+- Use %%systemd_preun in systemd-resolved
+
+* Fri Nov 29 2024 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 256.9-1
+- Version 256.9
+- Resolves rhbz#2329211
+
+* Tue Nov 19 2024 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 256.8-2
+- Pull in qemu from systemd-container
+
+* Thu Nov 14 2024 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 256.8-1
+- Version 256.8
+- Improvements to logging, documentation, systemd, systemd-repart, systemd-
+  networkd, systemd-network-generator, systemd-nspawn, systemd-resolved,
+  systemd-run, systemd-dissect, systemd-pcrlock, systemd-logind, systemd-
+  bsod, udev, ukify
+- Resolves #2323323: system will boot to cgroup v2 automatically unless
+  overriden
+- Resolves #2321268: freezing of user processes is disabled
+- Hardware database is updated
+
+* Thu Nov 14 2024 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 256.7-2
+- Disable freezing of user sessions (rhbz#2321268)
+
+* Fri Oct 11 2024 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 256.7-1
+- Version 256.7
+- Various small fixes in many components
+- Documentation updates
+
+* Tue Sep 24 2024 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 256.6-3
+- Move yum/dnf protection removal config file under /usr
+
+* Thu Sep 12 2024 Matteo Croce <teknoraver@meta.com> - 256.6-1
+- Version 256.6
+
+* Thu Aug 29 2024 Daan De Meyer <daan.j.demeyer@gmail.com> - 256.5-6
+- Always build ukify package
+
+* Wed Aug 28 2024 Daan De Meyer <daan.j.demeyer@gmail.com> - 256.5-5
+- Do not use patch to modify systemd-user pam config file
+
+* Wed Aug 28 2024 Daan De Meyer <daan.j.demeyer@gmail.com> - 256.5-4
+- Drop %%upstream conditionalization for patches
+
+* Tue Aug 27 2024 Daan De Meyer <daan.j.demeyer@gmail.com> - 256.5-3
+- Only make python3-pillow Recommends on Fedora
+
+* Sat Aug 24 2024 Davide Cavalca <dcavalca@fedoraproject.org> - 256.5-2
+- Do not require grubby on CentOS Stream 9
+
+* Tue Aug 20 2024 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 256.5-1
+- Version 256.5
+- Includes the patches for the kernel change with kernel threads in leaf
+  cgroups (https://github.com/systemd/systemd/pull/33885)
+- Various smaller fixes
+
+* Tue Aug 20 2024 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 256.4-4
+- Disable integration of userdb in sshd
+
+* Mon Jul 29 2024 Daan De Meyer <daan.j.demeyer@gmail.com> - 256.4-3
+- Backport patch to only read /proc/cmdline when not in container
+
+* Mon Jul 29 2024 Daan De Meyer <daan.j.demeyer@gmail.com> - 256.4-2
+- Backport upstream patch to try more initrd variants in
+  90-loaderentry.install
+
+* Thu Jul 25 2024 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 256.4-1
+- Version 256.4
+- Hardware db update
+- Minor fixes for systemd-udevd and varlink protocol
+
+* Tue Jul 23 2024 Daan De Meyer <daan.j.demeyer@gmail.com> - 256.3-3
+- Update tmpfiles --destroy-data patch
+
+* Tue Jul 23 2024 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 256.3-1
+- Version 256.3
+- A bunch of fixes for systemd (pid1)
+- Various upgrades related to running tests in mkosi
+
+* Sat Jul 20 2024 Daan De Meyer <daan.j.demeyer@gmail.com> - 256.2-17
+- Simplify BFQ scheduler enablement
+
+* Sat Jul 20 2024 Fedora Release Engineering <releng@fedoraproject.org> - 256.2-16
+- Rebuilt for https://fedoraproject.org/wiki/Fedora_41_Mass_Rebuild
+
 * Wed Jul 17 2024 Zbigniew Jędrzejewski-Szmek <zbyszek@in.waw.pl> - 256.2-9
 - Backport udma buffer access patch (rhbz#2298422)
 
