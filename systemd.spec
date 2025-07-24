@@ -131,12 +131,6 @@ Patch:          https://github.com/systemd/systemd/pull/26494.patch
 %if %{without upstream}
 # Those are downstream-only patches, but we don't want them in packit builds.
 
-# Temporarily drop use of PrivateTmp=disconnected. This is causing failures
-# in various places:
-# https://bugzilla.redhat.com/show_bug.cgi?id=2334015
-# https://github.com/coreos/fedora-coreos-tracker/issues/1857
-Patch:          0001-Revert-units-use-PrivateTmp-disconnected-instead-of-.patch
-
 # https://bugzilla.redhat.com/show_bug.cgi?id=2251843
 Patch:          https://github.com/systemd/systemd/pull/30846.patch
 %endif
