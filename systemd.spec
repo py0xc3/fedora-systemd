@@ -383,6 +383,7 @@ Summary:        systemd libraries
 License:        LGPL-2.1-or-later AND MIT
 Provides:       nss-myhostname = 0.4
 Provides:       nss-myhostname%{_isa} = 0.4
+Conflicts:      systemd-shared < %{version}-%{release}
 
 %description libs
 Libraries for systemd and udev.
@@ -390,6 +391,7 @@ Libraries for systemd and udev.
 %package shared
 Summary:        Internal systemd shared library
 License:        LGPL-2.1-or-later AND MIT
+Conflicts:      systemd-libs < %{version}-%{release}
 
 %description shared
 Internal libraries used by various systemd binaries.
