@@ -1,0 +1,25 @@
+From fc82a9c1a086647020647d8949e2d9a47540ac8c Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Petr=20Men=C5=A1=C3=ADk?= <pemensik@redhat.com>
+Date: Wed, 26 Nov 2025 16:58:26 +0100
+Subject: [PATCH] Supress synthetization of hostname by systemd-resolved
+ (rhbz#2417276)
+
+---
+ units/systemd-resolved.service.in | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/units/systemd-resolved.service.in b/units/systemd-resolved.service.in
+index fd046f2..46ea397 100644
+--- a/units/systemd-resolved.service.in
++++ b/units/systemd-resolved.service.in
+@@ -24,6 +24,7 @@ Wants=nss-lookup.target
+ AmbientCapabilities=CAP_SETPCAP CAP_NET_RAW CAP_NET_BIND_SERVICE
+ BusName=org.freedesktop.resolve1
+ CapabilityBoundingSet=CAP_SETPCAP CAP_NET_RAW CAP_NET_BIND_SERVICE
++Environment=SYSTEMD_RESOLVED_SYNTHESIZE_HOSTNAME=0
+ ExecStart={{LIBEXECDIR}}/systemd-resolved
+ LockPersonality=yes
+ MemoryDenyWriteExecute=yes
+-- 
+2.52.0
+

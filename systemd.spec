@@ -153,6 +153,10 @@ Patch:          https://github.com/systemd/systemd/pull/38769.patch
 # Workaround for https://bugzilla.redhat.com/show_bug.cgi?id=2415701
 Patch:          0001-machined-add-description-to-varlink-server-unify-err.patch
 Patch:          0002-machined-continue-without-resolve.hook-socket.patch
+
+# Stop synthetizing hostname in systemd-resolved
+# https://bugzilla.redhat.com/show_bug.cgi?id=2417276
+Patch:          0001-Supress-synthetization-of-hostname-by-systemd-resolv.patch
 %endif
 
 %ifarch %{ix86} x86_64 aarch64 riscv64
