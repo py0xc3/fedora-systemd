@@ -128,6 +128,8 @@ Source25:       98-default-mac-none.link
 
 Source26:       systemd-user
 
+Source27:       10-harden-yama-ptrace.conf
+
 %if 0%{?fedora} < 40 && 0%{?rhel} < 10
 # Work-around for dracut issue: run generators directly when we are in initrd
 # https://bugzilla.redhat.com/show_bug.cgi?id=2164404
