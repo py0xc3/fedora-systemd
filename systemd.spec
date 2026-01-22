@@ -101,17 +101,18 @@ Source0:        https://github.com/systemd/systemd/archive/v%{version_no_tilde}/
 # It is generated during systemd build and can be found at build/src/rpm/triggers.systemd.sh.
 Source1:        triggers.systemd
 Source2:        split-files.py
+
 Source4:        test_sysusers_defined.py
 
 Source6:        inittab
 Source7:        sysctl.conf.README
 Source8:        systemd-journal-remote.xml
 Source9:        systemd-journal-gatewayd.xml
-Source10:       20-yama-ptrace.conf
+
 Source11:       systemd-udev-trigger-no-reload.conf
+
 # https://fedoraproject.org/wiki/How_to_filter_libabigail_reports
 Source13:       libabigail.abignore
-
 Source14:       10-oomd-defaults.conf
 Source15:       10-oomd-per-slice-defaults.conf
 Source16:       10-timeout-abort.conf
@@ -123,9 +124,7 @@ Source21:       macros.sysusers
 Source22:       sysusers.attr
 Source23:       sysusers.prov
 Source24:       sysusers.generate-pre.sh
-
 Source25:       98-default-mac-none.link
-
 Source26:       systemd-user
 
 %if 0%{?fedora} < 40 && 0%{?rhel} < 10
