@@ -963,6 +963,7 @@ sed -r 's|/system/|/user/|g' %{SOURCE16} >10-timeout-abort.conf.user
 
 %install
 %meson_install
+ln -fs kmsconvt@.service %{buildroot}/usr/lib/systemd/system/autovt@.service
 
 # udev links
 %if "%{_sbindir}" != "%{_bindir}"
