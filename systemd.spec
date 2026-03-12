@@ -71,7 +71,7 @@ Url:            https://systemd.io
 # But don't do that on OBS, otherwise the version subst fails, and will be
 # like 257-123-gabcd257.1 instead of 257-123-gabcd
 %if %{without obs}
-Version:        %{?version_override}%{!?version_override:258.5}
+Version:        %{?version_override}%{!?version_override:258.6}
 %else
 Version:        %{?version_override}%{!?version_override:%(cat meson.version)}
 %endif
@@ -157,7 +157,7 @@ Patch:          0001-Revert-units-drop-runlevel-0-6-.target.patch
 Patch:          https://github.com/systemd/systemd/pull/38769.patch
 
 # userdb: omit empty parameters field in JSON messages
-Patch:          https://github.com/systemd/systemd/pull/38922.patch
+Patch:          0001-varlink-omit-empty-parameters-field-in-JSON-messages.patch
 %endif
 
 %ifarch %{ix86} x86_64 aarch64 riscv64
