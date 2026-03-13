@@ -71,7 +71,7 @@ Url:            https://systemd.io
 # But don't do that on OBS, otherwise the version subst fails, and will be
 # like 257-123-gabcd257.1 instead of 257-123-gabcd
 %if %{without obs}
-Version:        %{?version_override}%{!?version_override:258.6}
+Version:        %{?version_override}%{!?version_override:258.7}
 %else
 Version:        %{?version_override}%{!?version_override:%(cat meson.version)}
 %endif
@@ -156,8 +156,6 @@ Patch:          0001-Revert-units-drop-runlevel-0-6-.target.patch
 # We can drop this after SELinux policy is updated to handle the transition.
 Patch:          https://github.com/systemd/systemd/pull/38769.patch
 
-# userdb: omit empty parameters field in JSON messages
-Patch:          0001-varlink-omit-empty-parameters-field-in-JSON-messages.patch
 %endif
 
 %ifarch %{ix86} x86_64 aarch64 riscv64
