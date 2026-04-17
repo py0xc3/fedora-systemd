@@ -152,6 +152,9 @@ Patch:          38769.patch
 # Workaround for https://bugzilla.redhat.com/show_bug.cgi?id=2415701
 Patch:          0002-machined-continue-without-resolve.hook-socket.patch
 
+# Openssl 4 build fixes
+Patch:          0001-Update-OpenSSL-API-usage-in-pkcs11-util.patch
+
 %endif
 
 %ifarch %{ix86} x86_64 aarch64 riscv64
