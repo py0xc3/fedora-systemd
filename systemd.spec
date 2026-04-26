@@ -7,6 +7,7 @@
 %global system_unit_dir %{pkgdir}/system
 %global user_unit_dir %{pkgdir}/user
 
+
 %if 0%{?__isa_bits} == 64
 %global elf_bits (64bit)
 %global elf_suffix ()%{elf_bits}
