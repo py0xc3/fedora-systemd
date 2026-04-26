@@ -875,8 +875,16 @@ CONFIGURE_OPTS=(
         -Dstatus-unit-format-default=combined
 %if 0%{?fedora}
         # https://fedoraproject.org/wiki/Changes/Shorter_Shutdown_Timer
-        -Ddefault-timeout-sec=45
+        -Ddefault-timeout-sec=30
+        # systemd 261 replaced default-user-timeout-sec with the new
+        # default-user-timeout-multiplier (upstream PR
+        # https://github.com/systemd/systemd/pull/41800).
+        # 3/2 of the 45s base = 45s, preserving the previous absolute intent.
+%if %{lua: print(rpm.vercmp(rpm.expand("%{version}"), "261") >= 0 and 1 or 0)}
+        -Ddefault-user-timeout-multiplier=3/2
+%else
         -Ddefault-user-timeout-sec=45
+%endif
 %endif
         -Dconfigfiledir=/usr/lib
         -Doomd=true
