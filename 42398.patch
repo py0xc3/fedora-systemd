@@ -1,0 +1,2604 @@
+From 56a7febca7cd68a10cb85c6d8123db63217f4079 Mon Sep 17 00:00:00 2001
+From: Luca Boccassi <luca.boccassi@gmail.com>
+Date: Sat, 30 May 2026 22:50:20 +0100
+Subject: [PATCH 1/3] sd-dlopen: deduplicate identical .note.dlopen notes
+
+If the SD_ELF_NOTE_DLOPEN macro gets used twice in the same binary,
+with identical content, it will add two identical notes, which is
+wasteful and confusing.
+
+Emit each note into a COMDAT group keyed on its JSON payload, with an
+assembler .ifndef guard, so byte-identical notes fold to a single copy
+within a translation unit (assembler) and across translation units
+(linker). The section is marked SHF_GNU_RETAIN so --gc-sections keeps it,
+and uses the portable "%note" section type so it also assembles on
+architectures where "@" is the comment character (e.g. 32-bit ARM).
+
+This ensures SD_ELF_NOTE_DLOPEN can be used as many times as needed,
+and the result will be automatically deduplicated.
+
+The SHF_GNU_RETAIN (R) flag requires binutils >= 2.36, which cuts
+off CentOS 9. To avoid breaking builds, override the flags passed
+to the linker to skip that flag. This unfortunately means in many
+cases the ELF notes section will be dropped by the linker due to
+--gc-sections. For CentOS 9 builds, the choice is thus between
+not using --gc-sections and losing dlopen ELF notes, and the latter
+is made here given it's less impactful.
+
+Co-developed-by: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ meson.build                   | 10 +++++
+ src/systemd/sd-dlopen.h       | 75 +++++++++++++++++++----------------
+ test/units/TEST-65-ANALYZE.sh | 16 +++++++-
+ 3 files changed, 65 insertions(+), 36 deletions(-)
+
+diff --git a/meson.build b/meson.build
+index 8fbf9bbff7880..e9c64b098e5f4 100644
+--- a/meson.build
++++ b/meson.build
+@@ -571,6 +571,16 @@ have = cc.compiles(
+         name : '__attribute__((__no_reorder__))')
+ conf.set10('HAVE_ATTRIBUTE_NO_REORDER', have)
+ 
++# The "R" (SHF_GNU_RETAIN) section flag is only understood by binutils >= 2.36.
++# TODO: drop when support for CentOS 9 is dropped.
++if cc.compiles(
++        '__asm__(".pushsection .note.test, \\"aR\\", %note\\n.popsection\\n");',
++        name : 'assembler supports the "R" (SHF_GNU_RETAIN) section flag')
++        conf.set_quoted('_SD_ELF_NOTE_DLOPEN_SECTION_FLAGS', 'aGR')
++else
++        conf.set_quoted('_SD_ELF_NOTE_DLOPEN_SECTION_FLAGS', 'aG')
++endif
++
+ #####################################################################
+ # compilation result tests
+ 
+diff --git a/src/systemd/sd-dlopen.h b/src/systemd/sd-dlopen.h
+index a58b90e0ec08c..f9fe9584fb2b4 100644
+--- a/src/systemd/sd-dlopen.h
++++ b/src/systemd/sd-dlopen.h
+@@ -27,19 +27,6 @@
+ extern "C" {
+ #endif
+ 
+-#ifndef _SD_PASTE
+-#  define _SD_PASTE_INNER(a, b) a##b
+-#  define _SD_PASTE(a, b) _SD_PASTE_INNER(a, b)
+-#endif
+-
+-#ifndef _SD_UNIQ
+-#  ifdef __COUNTER__
+-#    define _SD_UNIQ _SD_PASTE(_sd_uniq_, __COUNTER__)
+-#  else
+-#    define _SD_UNIQ _SD_PASTE(_sd_uniq_, __LINE__)
+-#  endif
+-#endif
+-
+ /* ELF note macros implementing the FDO .note.dlopen standard.
+  *
+  * These macros embed metadata in an ELF binary's .note.dlopen section,
+@@ -63,33 +50,51 @@ extern "C" {
+ #define SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED "recommended"
+ #define SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED   "suggested"
+ 
+-#define _SD_ELF_NOTE_DLOPEN(json, variable_name)                               \
+-        __attribute__((used, section(".note.dlopen"))) _Alignas(sizeof(uint32_t)) static const struct { \
+-                struct {                                                        \
+-                        uint32_t n_namesz, n_descsz, n_type;                    \
+-                } nhdr;                                                         \
+-                char name[sizeof(SD_ELF_NOTE_DLOPEN_VENDOR)];                   \
+-                _Alignas(sizeof(uint32_t)) char dlopen_json[sizeof(json)];      \
+-        } variable_name = {                                                     \
+-                .nhdr = {                                                       \
+-                        .n_namesz = sizeof(SD_ELF_NOTE_DLOPEN_VENDOR),          \
+-                        .n_descsz = sizeof(json),                               \
+-                        .n_type   = SD_ELF_NOTE_DLOPEN_TYPE,                    \
+-                },                                                              \
+-                .name = SD_ELF_NOTE_DLOPEN_VENDOR,                              \
+-                .dlopen_json = json,                                            \
+-        }
++/* The "R" (SHF_GNU_RETAIN) flag is only understood by binutils >= 2.36, so it can be disabled by defining
++ * _SD_ELF_NOTE_DLOPEN_SECTION_FLAGS as 'aG' manually, but note that if --gc-sections is used when linking,
++ * the note will be dropped. */
++#ifndef _SD_ELF_NOTE_DLOPEN_SECTION_FLAGS
++#  define _SD_ELF_NOTE_DLOPEN_SECTION_FLAGS "aGR"
++#endif
++
++/* The json argument is a C string containing already backslash-escaped double quotes (i.e. the bytes
++ * [{\"feature\"...), so that once it is pasted into the assembler's .asciz directive the assembler decodes
++ * them back to plain quotes. The note is emitted into a COMDAT group keyed on the payload itself, which
++ * makes byte-identical notes fold to a single copy: the assembler folds duplicates within a translation
++ * unit (via the .ifndef guard) and the linker folds them across translation units (via the COMDAT group).
++ * This way a binary that triggers the same optional dependency from multiple call sites ends up with just
++ * one note for it. The n_type value below must match SD_ELF_NOTE_DLOPEN_TYPE (it is spelled out as a
++ * literal here as it cannot be expanded inside the assembler string). */
++#define _SD_ELF_NOTE_DLOPEN(json)                                                                                               \
++        __asm__ (                                                                                                               \
++                ".ifndef \"sd_dlopen:" json "\"\n"                                                                              \
++                ".set \"sd_dlopen:" json "\", 1\n"                                                                              \
++                ".pushsection .note.dlopen, \"" _SD_ELF_NOTE_DLOPEN_SECTION_FLAGS "\", %note, \"sd_dlopen:" json "\", comdat\n" \
++                ".balign 4\n"         /* notes require 4-byte alignment for the header and fields */                            \
++                ".long 884f - 883f\n" /* n_namesz: byte length of the vendor name (label 883->884) */                           \
++                ".long 882f - 881f\n" /* n_descsz: byte length of the JSON payload (label 881->882) */                          \
++                ".long 0x407c0c0a\n"  /* n_type: must match SD_ELF_NOTE_DLOPEN_TYPE */                                          \
++                "883:\n"              /* start of vendor name */                                                                \
++                ".asciz \"" SD_ELF_NOTE_DLOPEN_VENDOR "\"\n"                                                                    \
++                "884:\n"              /* end of vendor name */                                                                  \
++                ".balign 4\n"                                                                                                   \
++                "881:\n"              /* start of JSON payload */                                                               \
++                ".asciz \"" json "\"\n"                                                                                         \
++                "882:\n"              /* end of JSON payload */                                                                 \
++                ".balign 4\n"                                                                                                   \
++                ".popsection\n"                                                                                                 \
++                ".endif\n")
+ 
+-#define _SD_SONAME_ARRAY1(a) "[\"" a "\"]"
+-#define _SD_SONAME_ARRAY2(a, b) "[\"" a "\",\"" b "\"]"
+-#define _SD_SONAME_ARRAY3(a, b, c) "[\"" a "\",\"" b "\",\"" c "\"]"
+-#define _SD_SONAME_ARRAY4(a, b, c, d) "[\"" a "\",\"" b "\",\"" c "\",\"" d "\"]"
+-#define _SD_SONAME_ARRAY5(a, b, c, d, e) "[\"" a "\",\"" b "\",\"" c "\",\"" d "\",\"" e "\"]"
++#define _SD_SONAME_ARRAY1(a) "[\\\"" a "\\\"]"
++#define _SD_SONAME_ARRAY2(a, b) "[\\\"" a "\\\",\\\"" b "\\\"]"
++#define _SD_SONAME_ARRAY3(a, b, c) "[\\\"" a "\\\",\\\"" b "\\\",\\\"" c "\\\"]"
++#define _SD_SONAME_ARRAY4(a, b, c, d) "[\\\"" a "\\\",\\\"" b "\\\",\\\"" c "\\\",\\\"" d "\\\"]"
++#define _SD_SONAME_ARRAY5(a, b, c, d, e) "[\\\"" a "\\\",\\\"" b "\\\",\\\"" c "\\\",\\\"" d "\\\",\\\"" e "\\\"]"
+ #define _SD_SONAME_ARRAY_GET(_1,_2,_3,_4,_5,NAME,...) NAME
+ #define _SD_SONAME_ARRAY(...) _SD_SONAME_ARRAY_GET(__VA_ARGS__, _SD_SONAME_ARRAY5, _SD_SONAME_ARRAY4, _SD_SONAME_ARRAY3, _SD_SONAME_ARRAY2, _SD_SONAME_ARRAY1)(__VA_ARGS__)
+ 
+ #define SD_ELF_NOTE_DLOPEN(feature, description, priority, ...) \
+-        _SD_ELF_NOTE_DLOPEN("[{\"feature\":\"" feature "\",\"description\":\"" description "\",\"priority\":\"" priority "\",\"soname\":" _SD_SONAME_ARRAY(__VA_ARGS__) "}]", _SD_PASTE(_sd_elf_note_dlopen_, _SD_UNIQ))
++        _SD_ELF_NOTE_DLOPEN("[{\\\"feature\\\":\\\"" feature "\\\",\\\"description\\\":\\\"" description "\\\",\\\"priority\\\":\\\"" priority "\\\",\\\"soname\\\":" _SD_SONAME_ARRAY(__VA_ARGS__) "}]")
+ 
+ #ifdef __cplusplus
+ }
+diff --git a/test/units/TEST-65-ANALYZE.sh b/test/units/TEST-65-ANALYZE.sh
+index f98ececc53be5..a470883aff9ee 100755
+--- a/test/units/TEST-65-ANALYZE.sh
++++ b/test/units/TEST-65-ANALYZE.sh
+@@ -1015,10 +1015,24 @@ if systemd-analyze --version | grep -F "+ELFUTILS" >/dev/null; then
+ 
+     # For some unknown reason the .note.dlopen sections are removed when building with sanitizers, so only
+     # run this test if we're not running under sanitizers.
+-    if [[ ! -v ASAN_OPTIONS ]]; then
++    # Also the linker removes them on CentOS 9 as binutils < 2.36 does not support the SHF_GNU_RETAIN flag
++    if [[ ! -v ASAN_OPTIONS ]] && ( . /etc/os-release; [[ ! "$ID $ID_LIKE" =~ centos|rhel ]] || systemd-analyze compare-versions "$VERSION_ID" ge 10 ); then
+         shared="$(ldd /lib/systemd/systemd | grep shared | cut -d' ' -f3)"
+         systemd-analyze dlopen-metadata "$shared"
+         systemd-analyze dlopen-metadata --json=short "$shared"
++
++        dlopen_json="$(systemd-analyze dlopen-metadata --json=short "$shared")"
++        assert_eq "$(echo "$dlopen_json" | jq 'type')" '"array"'
++        assert_ge "$(echo "$dlopen_json" | jq 'length')" 1
++        # Every entry must have the four fields with the expected types and a valid priority.
++        assert_eq "$(echo "$dlopen_json" | jq 'all(
++            (.feature | type == "string") and
++            (.description | type == "string") and
++            (.priority | IN("required", "recommended", "suggested")) and
++            (.soname | type == "array" and length > 0 and all(type == "string"))
++        )')" 'true'
++        # libmount is unconditionally pulled into libsystemd-shared, so its note must be present and correct.
++        assert_eq "$(echo "$dlopen_json" | jq 'any(.feature == "mount" and (.soname | index("libmount.so.1") != null))')" 'true'
+     fi
+ fi
+ 
+
+From 590e22643722cf1268bd24f9056c7115ab0c1cf2 Mon Sep 17 00:00:00 2001
+From: Luca Boccassi <luca.boccassi@gmail.com>
+Date: Sat, 30 May 2026 22:51:17 +0100
+Subject: [PATCH 2/3] shared: add DLOPEN_* wrapper macros that stamp
+ .note.dlopen on callers
+
+This macro emits an SD_ELF_NOTE_DLOPEN note so that calling sites,
+and not just libsystemd-shared, get the ELF stamped with the notes
+documenting the dependency. Currently most of the dlopen notes end
+up in libsystemd-shared, and executables have no way to document
+the optional dependencies they need. With this new macro, this
+issue can be fixed.
+
+Co-developed-by: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ src/basic/locale-util.c      |  6 +-----
+ src/basic/locale-util.h      | 18 ++++++++++++++++++
+ src/shared/acl-util.c        |  6 +-----
+ src/shared/acl-util.h        | 15 +++++++++++++++
+ src/shared/blkid-util.c      |  6 +-----
+ src/shared/blkid-util.h      | 16 ++++++++++++++++
+ src/shared/bpf-util.c        |  6 +-----
+ src/shared/bpf-util.h        | 15 +++++++++++++++
+ src/shared/crypto-util.c     |  6 +-----
+ src/shared/crypto-util.h     | 16 ++++++++++++++++
+ src/shared/cryptsetup-util.c |  6 +-----
+ src/shared/cryptsetup-util.h | 16 ++++++++++++++++
+ src/shared/curl-util.c       |  6 +-----
+ src/shared/curl-util.h       | 15 +++++++++++++++
+ src/shared/fdisk-util.c      |  6 +-----
+ src/shared/fdisk-util.h      | 15 +++++++++++++++
+ src/shared/idn-util.c        |  6 +-----
+ src/shared/idn-util.h        | 16 ++++++++++++++++
+ src/shared/libarchive-util.c |  6 +-----
+ src/shared/libarchive-util.h | 15 ++++++++++++++-
+ src/shared/libmount-util.c   |  6 +-----
+ src/shared/libmount-util.h   | 14 ++++++++++++++
+ src/shared/microhttpd-util.c |  6 +-----
+ src/shared/microhttpd-util.h | 15 +++++++++++++++
+ src/shared/module-util.c     |  6 +-----
+ src/shared/module-util.h     | 14 ++++++++++++++
+ src/shared/pam-util.c        |  6 +-----
+ src/shared/pam-util.h        | 15 +++++++++++++++
+ src/shared/seccomp-util.c    |  6 +-----
+ src/shared/seccomp-util.h    | 14 ++++++++++++++
+ src/shared/selinux-util.c    |  6 +-----
+ src/shared/selinux-util.h    | 15 +++++++++++++++
+ src/shared/ssl-util.c        |  6 +-----
+ src/shared/ssl-util.h        | 15 +++++++++++++++
+ src/shared/tpm2-util.c       | 24 ++++--------------------
+ src/shared/tpm2-util.h       | 25 +++++++++++++++++++++++++
+ 36 files changed, 304 insertions(+), 106 deletions(-)
+
+diff --git a/src/basic/locale-util.c b/src/basic/locale-util.c
+index 6d4493c0bb450..2a8e676edad20 100644
+--- a/src/basic/locale-util.c
++++ b/src/basic/locale-util.c
+@@ -39,11 +39,7 @@ int dlopen_libintl(int log_level) {
+ #else
+         static void *libintl_dl = NULL;
+ 
+-        SD_ELF_NOTE_DLOPEN(
+-                        "intl",
+-                        "Support for message translation via gettext",
+-                        SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED,
+-                        "libintl.so.8");
++        LIBINTL_NOTE(SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED);
+ 
+         return dlopen_many_sym_or_warn(
+                         &libintl_dl,
+diff --git a/src/basic/locale-util.h b/src/basic/locale-util.h
+index fb22953f16f0e..c2cbf3580a2af 100644
+--- a/src/basic/locale-util.h
++++ b/src/basic/locale-util.h
+@@ -4,6 +4,8 @@
+ #include <libintl.h>    /* IWYU pragma: export */
+ #include <locale.h>     /* IWYU pragma: export */
+ 
++#include "sd-dlopen.h"  /* IWYU pragma: export */
++
+ #include "basic-forward.h"
+ #include "dlfcn-util.h"
+ 
+@@ -14,6 +16,22 @@ extern DLSYM_PROTOTYPE(dgettext) __attribute__((format_arg(2)));
+ 
+ int dlopen_libintl(int log_level);
+ 
++#ifdef __GLIBC__
++#define DLOPEN_LIBINTL(log_level, priority) dlopen_libintl(log_level)
++#else
++#define LIBINTL_NOTE(priority)                                          \
++        SD_ELF_NOTE_DLOPEN("intl",                                      \
++                           "Support for message translation via gettext", \
++                           priority,                                    \
++                           "libintl.so.8")
++
++#define DLOPEN_LIBINTL(log_level, priority)                             \
++        ({                                                              \
++                LIBINTL_NOTE(priority);                                 \
++                dlopen_libintl(log_level);                              \
++        })
++#endif
++
+ typedef enum LocaleVariable {
+         /* We don't list LC_ALL here on purpose. People should be
+          * using LANG instead. */
+diff --git a/src/shared/acl-util.c b/src/shared/acl-util.c
+index 3e6f75d52ac76..84fca4da0e444 100644
+--- a/src/shared/acl-util.c
++++ b/src/shared/acl-util.c
+@@ -49,11 +49,7 @@ int dlopen_libacl(int log_level) {
+ #if HAVE_ACL
+         static void *libacl_dl = NULL;
+ 
+-        SD_ELF_NOTE_DLOPEN(
+-                        "acl",
+-                        "Support for file Access Control Lists (ACLs)",
+-                        SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED,
+-                        "libacl.so.1");
++        LIBACL_NOTE(SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+ 
+         return dlopen_many_sym_or_warn(
+                         &libacl_dl,
+diff --git a/src/shared/acl-util.h b/src/shared/acl-util.h
+index 5e2aeb94a9f63..981f43a8cc082 100644
+--- a/src/shared/acl-util.h
++++ b/src/shared/acl-util.h
+@@ -1,6 +1,8 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+ #pragma once
+ 
++#include "sd-dlopen.h"
++
+ #include "shared-forward.h"
+ 
+ #if HAVE_ACL
+@@ -60,6 +62,17 @@ static inline int acl_set_perm(acl_permset_t ps, acl_perm_t p, bool b) {
+         return (b ? sym_acl_add_perm : sym_acl_delete_perm)(ps, p);
+ }
+ 
++#define LIBACL_NOTE(priority)                                           \
++        SD_ELF_NOTE_DLOPEN("acl",                                       \
++                           "Support for file Access Control Lists (ACLs)", \
++                           priority,                                    \
++                           "libacl.so.1")
++
++#define DLOPEN_LIBACL(log_level, priority)                              \
++        ({                                                              \
++                LIBACL_NOTE(priority);                                  \
++                dlopen_libacl(log_level);                               \
++        })
+ #else
+ 
+ typedef void* acl_t;
+@@ -90,6 +103,8 @@ static inline int devnode_acl(int fd, const Set *uids) {
+ static inline int fd_add_uid_acl_permission(int fd, uid_t uid, unsigned mask) {
+         return -EOPNOTSUPP;
+ }
++
++#define DLOPEN_LIBACL(log_level, priority) dlopen_libacl(log_level)
+ #endif
+ 
+ int dlopen_libacl(int log_level);
+diff --git a/src/shared/blkid-util.c b/src/shared/blkid-util.c
+index 022a43ffa90fd..233d45c4f0c87 100644
+--- a/src/shared/blkid-util.c
++++ b/src/shared/blkid-util.c
+@@ -99,11 +99,7 @@ int dlopen_libblkid(int log_level) {
+ #if HAVE_BLKID
+         static void *libblkid_dl = NULL;
+ 
+-        SD_ELF_NOTE_DLOPEN(
+-                        "blkid",
+-                        "Support for block device identification",
+-                        SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED,
+-                        "libblkid.so.1");
++        LIBBLKID_NOTE(SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+ 
+         return dlopen_many_sym_or_warn(
+                         &libblkid_dl,
+diff --git a/src/shared/blkid-util.h b/src/shared/blkid-util.h
+index 718a0f15a917f..c211bbf3abc0f 100644
+--- a/src/shared/blkid-util.h
++++ b/src/shared/blkid-util.h
+@@ -1,6 +1,8 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+ #pragma once
+ 
++#include "sd-dlopen.h"
++
+ #include "shared-forward.h"
+ 
+ #if HAVE_BLKID
+@@ -63,6 +65,20 @@ enum {
+ 
+ int blkid_probe_lookup_value_id128(blkid_probe b, const char *field, sd_id128_t *ret);
+ int blkid_probe_lookup_value_u64(blkid_probe b, const char *field, uint64_t *ret);
++
++#define LIBBLKID_NOTE(priority)                                         \
++        SD_ELF_NOTE_DLOPEN("blkid",                                     \
++                           "Support for block device identification",   \
++                           priority,                                    \
++                           "libblkid.so.1")
++
++#define DLOPEN_LIBBLKID(log_level, priority)                            \
++        ({                                                              \
++                LIBBLKID_NOTE(priority);                                \
++                dlopen_libblkid(log_level);                             \
++        })
++#else
++#define DLOPEN_LIBBLKID(log_level, priority) dlopen_libblkid(log_level)
+ #endif
+ 
+ int dlopen_libblkid(int log_level);
+diff --git a/src/shared/bpf-util.c b/src/shared/bpf-util.c
+index ea703ce589106..92fc05f8fc8d5 100644
+--- a/src/shared/bpf-util.c
++++ b/src/shared/bpf-util.c
+@@ -87,11 +87,7 @@ int dlopen_bpf(int log_level) {
+         if (cached < 0)
+                 return cached; /* Already tried, and failed. */
+ 
+-        SD_ELF_NOTE_DLOPEN(
+-                        "bpf",
+-                        "Support firewalling and sandboxing with BPF",
+-                        SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED,
+-                        "libbpf.so.1", "libbpf.so.0");
++        BPF_NOTE(SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED);
+ 
+         DISABLE_WARNING_DEPRECATED_DECLARATIONS;
+ 
+diff --git a/src/shared/bpf-util.h b/src/shared/bpf-util.h
+index 622e4c2e2831f..faf7349b8a079 100644
+--- a/src/shared/bpf-util.h
++++ b/src/shared/bpf-util.h
+@@ -3,6 +3,8 @@
+ 
+ #include <syslog.h>
+ 
++#include "sd-dlopen.h"
++
+ #if HAVE_LIBBPF
+ 
+ #include <bpf/bpf.h>    /* IWYU pragma: export */
+@@ -88,6 +90,19 @@ static inline int compat_bpf_map_create(
+  * we understand. */
+ int bpf_get_error_translated(const void *ptr);
+ 
++#define BPF_NOTE(priority)                                              \
++        SD_ELF_NOTE_DLOPEN("bpf",                                       \
++                           "Support firewalling and sandboxing with BPF", \
++                           priority,                                    \
++                           "libbpf.so.1", "libbpf.so.0")
++
++#define DLOPEN_BPF(log_level, priority)                                 \
++        ({                                                              \
++                BPF_NOTE(priority);                                     \
++                dlopen_bpf(log_level);                                  \
++        })
++#else
++#define DLOPEN_BPF(log_level, priority) dlopen_bpf(log_level)
+ #endif
+ 
+ int dlopen_bpf(int log_level);
+diff --git a/src/shared/crypto-util.c b/src/shared/crypto-util.c
+index bca43aebc9acb..5359078f6cf20 100644
+--- a/src/shared/crypto-util.c
++++ b/src/shared/crypto-util.c
+@@ -336,11 +336,7 @@ int dlopen_libcrypto(int log_level) {
+ #if HAVE_OPENSSL
+         static void *libcrypto_dl = NULL;
+ 
+-        SD_ELF_NOTE_DLOPEN(
+-                        "libcrypto",
+-                        "Support for cryptographic operations",
+-                        SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED,
+-                        "libcrypto.so.3");
++        LIBCRYPTO_NOTE(SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED);
+ 
+         return dlopen_many_sym_or_warn(
+                         &libcrypto_dl,
+diff --git a/src/shared/crypto-util.h b/src/shared/crypto-util.h
+index 7e975c0240603..f3494bc6836b3 100644
+--- a/src/shared/crypto-util.h
++++ b/src/shared/crypto-util.h
+@@ -1,6 +1,8 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+ #pragma once
+ 
++#include "sd-dlopen.h"
++
+ #include "shared-forward.h"
+ #include "iovec-util.h"
+ #include "sha256.h"
+@@ -31,6 +33,18 @@ int dlopen_libcrypto(int log_level);
+ #define X509_FINGERPRINT_SIZE SHA256_DIGEST_SIZE
+ 
+ #if HAVE_OPENSSL
++#define LIBCRYPTO_NOTE(priority)                                        \
++        SD_ELF_NOTE_DLOPEN("libcrypto",                                 \
++                           "Support for cryptographic operations",      \
++                           priority,                                    \
++                           "libcrypto.so.3")
++
++#define DLOPEN_LIBCRYPTO(log_level, priority)                           \
++        ({                                                              \
++                LIBCRYPTO_NOTE(priority);                               \
++                dlopen_libcrypto(log_level);                            \
++        })
++
+ #  include <openssl/bio.h>              /* IWYU pragma: export */
+ #  include <openssl/bn.h>               /* IWYU pragma: export */
+ #  include <openssl/crypto.h>           /* IWYU pragma: export */
+@@ -402,4 +416,6 @@ int openssl_extract_public_key(EVP_PKEY *private_key, EVP_PKEY **ret);
+ OpenSSLAskPasswordUI* openssl_ask_password_ui_free(OpenSSLAskPasswordUI *ui);
+ DEFINE_TRIVIAL_CLEANUP_FUNC_FULL(OpenSSLAskPasswordUI*, openssl_ask_password_ui_free, NULL);
+ 
++#else
++#define DLOPEN_LIBCRYPTO(log_level, priority) dlopen_libcrypto(log_level)
+ #endif
+diff --git a/src/shared/cryptsetup-util.c b/src/shared/cryptsetup-util.c
+index d80824578f252..35a59721f8842 100644
+--- a/src/shared/cryptsetup-util.c
++++ b/src/shared/cryptsetup-util.c
+@@ -281,11 +281,7 @@ int dlopen_cryptsetup(int log_level) {
+          * still available though, and given we want to support 2.2.0 for a while longer, we'll use the old
+          * symbol if the new one is not available. */
+ 
+-        SD_ELF_NOTE_DLOPEN(
+-                        "cryptsetup",
+-                        "Support for disk encryption, integrity, and authentication",
+-                        SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED,
+-                        "libcryptsetup.so.12");
++        CRYPTSETUP_NOTE(SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED);
+ 
+         r = dlopen_many_sym_or_warn(
+                         &cryptsetup_dl, "libcryptsetup.so.12", log_level,
+diff --git a/src/shared/cryptsetup-util.h b/src/shared/cryptsetup-util.h
+index 23d52d111ae0b..1b3ab8b9604f0 100644
+--- a/src/shared/cryptsetup-util.h
++++ b/src/shared/cryptsetup-util.h
+@@ -1,6 +1,8 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+ #pragma once
+ 
++#include "sd-dlopen.h"
++
+ #include "dlfcn-util.h"
+ #include "shared-forward.h"
+ 
+@@ -89,6 +91,20 @@ int cryptsetup_add_token_json(struct crypt_device *cd, sd_json_variant *v);
+ int cryptsetup_get_volume_key_prefix(struct crypt_device *cd, const char *volume_name, char **ret);
+ int cryptsetup_get_volume_key_id(struct crypt_device *cd, const char *volume_name, const void *volume_key,
+                                  size_t volume_key_size,  char **ret);
++
++#define CRYPTSETUP_NOTE(priority)                                       \
++        SD_ELF_NOTE_DLOPEN("cryptsetup",                                \
++                           "Support for disk encryption, integrity, and authentication", \
++                           priority,                                    \
++                           "libcryptsetup.so.12")
++
++#define DLOPEN_CRYPTSETUP(log_level, priority)                          \
++        ({                                                              \
++                CRYPTSETUP_NOTE(priority);                              \
++                dlopen_cryptsetup(log_level);                           \
++        })
++#else
++#define DLOPEN_CRYPTSETUP(log_level, priority) dlopen_cryptsetup(log_level)
+ #endif
+ 
+ int dlopen_cryptsetup(int log_level);
+diff --git a/src/shared/curl-util.c b/src/shared/curl-util.c
+index aabc3217290eb..961a97ad2f795 100644
+--- a/src/shared/curl-util.c
++++ b/src/shared/curl-util.c
+@@ -604,11 +604,7 @@ int dlopen_curl(int log_level) {
+ #if HAVE_LIBCURL
+         static void *curl_dl = NULL;
+ 
+-        SD_ELF_NOTE_DLOPEN(
+-                        "curl",
+-                        "Support for downloading and uploading files over HTTP",
+-                        SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED,
+-                        "libcurl.so.4");
++        CURL_NOTE(SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED);
+ 
+         return dlopen_many_sym_or_warn(
+                         &curl_dl,
+diff --git a/src/shared/curl-util.h b/src/shared/curl-util.h
+index c35de1cb7b254..33bf3684c9eea 100644
+--- a/src/shared/curl-util.h
++++ b/src/shared/curl-util.h
+@@ -1,6 +1,8 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+ #pragma once
+ 
++#include "sd-dlopen.h"
++
+ #include "shared-forward.h"
+ 
+ #if HAVE_LIBCURL
+@@ -71,6 +73,19 @@ int curl_append_to_header(struct curl_slist **list, char **headers);
+ DEFINE_TRIVIAL_CLEANUP_FUNC_FULL_RENAME(CURL*, sym_curl_easy_cleanup, curl_easy_cleanupp, NULL);
+ DEFINE_TRIVIAL_CLEANUP_FUNC_FULL_RENAME(struct curl_slist*, sym_curl_slist_free_all, curl_slist_free_allp, NULL);
+ 
++#define CURL_NOTE(priority)                                             \
++        SD_ELF_NOTE_DLOPEN("curl",                                      \
++                           "Support for downloading and uploading files over HTTP", \
++                           priority,                                    \
++                           "libcurl.so.4")
++
++#define DLOPEN_CURL(log_level, priority)                                \
++        ({                                                              \
++                CURL_NOTE(priority);                                    \
++                dlopen_curl(log_level);                                 \
++        })
++#else
++#define DLOPEN_CURL(log_level, priority) dlopen_curl(log_level)
+ #endif
+ 
+ int dlopen_curl(int log_level);
+diff --git a/src/shared/fdisk-util.c b/src/shared/fdisk-util.c
+index 5c55135842a28..8efafbc96e469 100644
+--- a/src/shared/fdisk-util.c
++++ b/src/shared/fdisk-util.c
+@@ -83,11 +83,7 @@ int dlopen_fdisk(int log_level) {
+ #if HAVE_LIBFDISK
+         static void *fdisk_dl = NULL;
+ 
+-        SD_ELF_NOTE_DLOPEN(
+-                        "fdisk",
+-                        "Support for reading and writing partition tables",
+-                        SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED,
+-                        "libfdisk.so.1");
++        FDISK_NOTE(SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED);
+ 
+         return dlopen_many_sym_or_warn(
+                         &fdisk_dl,
+diff --git a/src/shared/fdisk-util.h b/src/shared/fdisk-util.h
+index 66620c9c1cf50..367c6cd051e44 100644
+--- a/src/shared/fdisk-util.h
++++ b/src/shared/fdisk-util.h
+@@ -1,6 +1,8 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+ #pragma once
+ 
++#include "sd-dlopen.h"
++
+ #include "shared-forward.h"
+ 
+ #if HAVE_LIBFDISK
+@@ -84,6 +86,19 @@ int fdisk_partition_get_type_as_id128(struct fdisk_partition *p, sd_id128_t *ret
+ int fdisk_partition_get_attrs_as_uint64(struct fdisk_partition *pa, uint64_t *ret);
+ int fdisk_partition_set_attrs_as_uint64(struct fdisk_partition *pa, uint64_t flags);
+ 
++#define FDISK_NOTE(priority)                                            \
++        SD_ELF_NOTE_DLOPEN("fdisk",                                     \
++                           "Support for reading and writing partition tables", \
++                           priority,                                    \
++                           "libfdisk.so.1")
++
++#define DLOPEN_FDISK(log_level, priority)                               \
++        ({                                                              \
++                FDISK_NOTE(priority);                                   \
++                dlopen_fdisk(log_level);                                \
++        })
++#else
++#define DLOPEN_FDISK(log_level, priority) dlopen_fdisk(log_level)
+ #endif
+ 
+ int dlopen_fdisk(int log_level);
+diff --git a/src/shared/idn-util.c b/src/shared/idn-util.c
+index 01512b95dda41..01c808b57fead 100644
+--- a/src/shared/idn-util.c
++++ b/src/shared/idn-util.c
+@@ -17,11 +17,7 @@ DLSYM_PROTOTYPE(idn2_to_unicode_8z8z) = NULL;
+ 
+ int dlopen_idn(int log_level) {
+ #if HAVE_LIBIDN2
+-        SD_ELF_NOTE_DLOPEN(
+-                        "idn",
+-                        "Support for internationalized domain names",
+-                        SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED,
+-                        "libidn2.so.0");
++        IDN_NOTE(SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED);
+ 
+         return dlopen_many_sym_or_warn(
+                         &idn_dl, "libidn2.so.0", log_level,
+diff --git a/src/shared/idn-util.h b/src/shared/idn-util.h
+index 918f8c0a57fbd..9bed27140fde9 100644
+--- a/src/shared/idn-util.h
++++ b/src/shared/idn-util.h
+@@ -1,6 +1,8 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+ #pragma once
+ 
++#include "sd-dlopen.h"
++
+ #include "shared-forward.h"
+ 
+ #if HAVE_LIBIDN2
+@@ -11,6 +13,20 @@
+ extern DLSYM_PROTOTYPE(idn2_lookup_u8);
+ extern const char *(*sym_idn2_strerror)(int rc) _const_;
+ extern DLSYM_PROTOTYPE(idn2_to_unicode_8z8z);
++
++#define IDN_NOTE(priority)                                              \
++        SD_ELF_NOTE_DLOPEN("idn",                                       \
++                           "Support for internationalized domain names", \
++                           priority,                                    \
++                           "libidn2.so.0")
++
++#define DLOPEN_IDN(log_level, priority)                                 \
++        ({                                                              \
++                IDN_NOTE(priority);                                     \
++                dlopen_idn(log_level);                                  \
++        })
++#else
++#define DLOPEN_IDN(log_level, priority) dlopen_idn(log_level)
+ #endif
+ 
+ int dlopen_idn(int log_level);
+diff --git a/src/shared/libarchive-util.c b/src/shared/libarchive-util.c
+index c037f4a770b76..5879cf62721bc 100644
+--- a/src/shared/libarchive-util.c
++++ b/src/shared/libarchive-util.c
+@@ -80,11 +80,7 @@ int dlopen_libarchive(int log_level) {
+         static void *libarchive_dl = NULL;
+         int r;
+ 
+-        SD_ELF_NOTE_DLOPEN(
+-                        "archive",
+-                        "Support for decompressing archive files",
+-                        SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED,
+-                        "libarchive.so.13");
++        LIBARCHIVE_NOTE(SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED);
+ 
+         r = dlopen_many_sym_or_warn(
+                         &libarchive_dl,
+diff --git a/src/shared/libarchive-util.h b/src/shared/libarchive-util.h
+index 9f47ea67eacd0..afaf3712007a8 100644
+--- a/src/shared/libarchive-util.h
++++ b/src/shared/libarchive-util.h
+@@ -1,6 +1,8 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+ #pragma once
+ 
++#include "sd-dlopen.h"
++
+ #include "shared-forward.h"
+ 
+ #if HAVE_LIBARCHIVE
+@@ -79,9 +81,20 @@ DEFINE_TRIVIAL_CLEANUP_FUNC_FULL_RENAME(struct archive_entry*, sym_archive_entry
+ DEFINE_TRIVIAL_CLEANUP_FUNC_FULL_RENAME(struct archive*, sym_archive_write_free, archive_write_freep, NULL);
+ DEFINE_TRIVIAL_CLEANUP_FUNC_FULL_RENAME(struct archive*, sym_archive_read_free, archive_read_freep, NULL);
+ 
+-#else
++#define LIBARCHIVE_NOTE(priority)                                       \
++        SD_ELF_NOTE_DLOPEN("archive",                                   \
++                           "Support for decompressing archive files",   \
++                           priority,                                    \
++                           "libarchive.so.13")
+ 
++#define DLOPEN_LIBARCHIVE(log_level, priority)                          \
++        ({                                                              \
++                LIBARCHIVE_NOTE(priority);                              \
++                dlopen_libarchive(log_level);                           \
++        })
+ 
++#else
++#define DLOPEN_LIBARCHIVE(log_level, priority) dlopen_libarchive(log_level)
+ #endif
+ 
+ int dlopen_libarchive(int log_level);
+diff --git a/src/shared/libmount-util.c b/src/shared/libmount-util.c
+index 065fcc2cb2656..fd83da136ff3d 100644
+--- a/src/shared/libmount-util.c
++++ b/src/shared/libmount-util.c
+@@ -120,11 +120,7 @@ int dlopen_libmount(int log_level) {
+ #if HAVE_LIBMOUNT
+         static void *libmount_dl = NULL;
+ 
+-        SD_ELF_NOTE_DLOPEN(
+-                        "mount",
+-                        "Support for mount enumeration",
+-                        SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED,
+-                        "libmount.so.1");
++        LIBMOUNT_NOTE(SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+ 
+         return dlopen_many_sym_or_warn(
+                         &libmount_dl,
+diff --git a/src/shared/libmount-util.h b/src/shared/libmount-util.h
+index 7eb7b230b2ff3..44e58ec932040 100644
+--- a/src/shared/libmount-util.h
++++ b/src/shared/libmount-util.h
+@@ -1,6 +1,8 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+ #pragma once
+ 
++#include "sd-dlopen.h"
++
+ #include "shared-forward.h"
+ 
+ #if HAVE_LIBMOUNT
+@@ -73,6 +75,17 @@ int libmount_is_leaf(
+                 struct libmnt_table *table,
+                 struct libmnt_fs *fs);
+ 
++#define LIBMOUNT_NOTE(priority)                                         \
++        SD_ELF_NOTE_DLOPEN("mount",                                     \
++                           "Support for mount enumeration",             \
++                           priority,                                    \
++                           "libmount.so.1")
++
++#define DLOPEN_LIBMOUNT(log_level, priority)                            \
++        ({                                                              \
++                LIBMOUNT_NOTE(priority);                                \
++                dlopen_libmount(log_level);                             \
++        })
+ #else
+ 
+ struct libmnt_monitor;
+@@ -83,6 +96,7 @@ static inline void* sym_mnt_unref_monitor(struct libmnt_monitor *p) {
+         return NULL;
+ }
+ 
++#define DLOPEN_LIBMOUNT(log_level, priority) dlopen_libmount(log_level)
+ #endif
+ 
+ int dlopen_libmount(int log_level);
+diff --git a/src/shared/microhttpd-util.c b/src/shared/microhttpd-util.c
+index ade36a8c744a4..9820a1e400015 100644
+--- a/src/shared/microhttpd-util.c
++++ b/src/shared/microhttpd-util.c
+@@ -36,11 +36,7 @@ int dlopen_microhttpd(int log_level) {
+ #if HAVE_MICROHTTPD
+         static void *microhttpd_dl = NULL;
+ 
+-        SD_ELF_NOTE_DLOPEN(
+-                        "microhttpd",
+-                        "Support for embedded HTTP server via libmicrohttpd",
+-                        SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED,
+-                        "libmicrohttpd.so.12");
++        MICROHTTPD_NOTE(SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED);
+ 
+         return dlopen_many_sym_or_warn(
+                         &microhttpd_dl,
+diff --git a/src/shared/microhttpd-util.h b/src/shared/microhttpd-util.h
+index 488ba7ea6e883..39b2b9267b2e3 100644
+--- a/src/shared/microhttpd-util.h
++++ b/src/shared/microhttpd-util.h
+@@ -1,11 +1,24 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+ #pragma once
+ 
++#include "sd-dlopen.h"
++
+ #include "shared-forward.h"
+ 
+ int dlopen_microhttpd(int log_level);
+ 
+ #if HAVE_MICROHTTPD
++#define MICROHTTPD_NOTE(priority)                                       \
++        SD_ELF_NOTE_DLOPEN("microhttpd",                                \
++                           "Support for embedded HTTP server via libmicrohttpd", \
++                           priority,                                    \
++                           "libmicrohttpd.so.12")
++
++#define DLOPEN_MICROHTTPD(log_level, priority)                          \
++        ({                                                              \
++                MICROHTTPD_NOTE(priority);                              \
++                dlopen_microhttpd(log_level);                           \
++        })
+ 
+ #include <microhttpd.h>
+ 
+@@ -134,4 +147,6 @@ int setup_gnutls_logger(char **categories);
+ DEFINE_TRIVIAL_CLEANUP_FUNC_FULL_RENAME(struct MHD_Daemon*, sym_MHD_stop_daemon, MHD_stop_daemonp, NULL);
+ DEFINE_TRIVIAL_CLEANUP_FUNC_FULL_RENAME(struct MHD_Response*, sym_MHD_destroy_response, MHD_destroy_responsep, NULL);
+ 
++#else
++#define DLOPEN_MICROHTTPD(log_level, priority) dlopen_microhttpd(log_level)
+ #endif
+diff --git a/src/shared/module-util.c b/src/shared/module-util.c
+index 2fb5cd332914b..e060c69d9d675 100644
+--- a/src/shared/module-util.c
++++ b/src/shared/module-util.c
+@@ -173,11 +173,7 @@ int dlopen_libkmod(int log_level) {
+ #if HAVE_KMOD
+         static void *libkmod_dl = NULL;
+ 
+-        SD_ELF_NOTE_DLOPEN(
+-                        "kmod",
+-                        "Support for loading kernel modules",
+-                        SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED,
+-                        "libkmod.so.2");
++        LIBKMOD_NOTE(SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+ 
+         return dlopen_many_sym_or_warn(
+                         &libkmod_dl,
+diff --git a/src/shared/module-util.h b/src/shared/module-util.h
+index 629979722c734..730e14c31b32a 100644
+--- a/src/shared/module-util.h
++++ b/src/shared/module-util.h
+@@ -1,6 +1,8 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+ #pragma once
+ 
++#include "sd-dlopen.h"
++
+ #include "shared-forward.h"
+ 
+ #if HAVE_KMOD
+@@ -35,6 +37,17 @@ DEFINE_TRIVIAL_CLEANUP_FUNC_FULL_RENAME(struct kmod_list*, sym_kmod_module_unref
+ int module_load_and_warn(struct kmod_ctx *ctx, const char *module, bool verbose);
+ int module_setup_context(struct kmod_ctx **ret);
+ 
++#define LIBKMOD_NOTE(priority)                                          \
++        SD_ELF_NOTE_DLOPEN("kmod",                                      \
++                           "Support for loading kernel modules",        \
++                           priority,                                    \
++                           "libkmod.so.2")
++
++#define DLOPEN_LIBKMOD(log_level, priority)                             \
++        ({                                                              \
++                LIBKMOD_NOTE(priority);                                 \
++                dlopen_libkmod(log_level);                              \
++        })
+ #else
+ 
+ struct kmod_ctx;
+@@ -48,6 +61,7 @@ static inline int module_load_and_warn(struct kmod_ctx *ctx, const char *module,
+         return -EOPNOTSUPP;
+ }
+ 
++#define DLOPEN_LIBKMOD(log_level, priority) dlopen_libkmod(log_level)
+ #endif
+ 
+ int dlopen_libkmod(int log_level);
+diff --git a/src/shared/pam-util.c b/src/shared/pam-util.c
+index fb57dd97575fc..0fe4207a0b7a1 100644
+--- a/src/shared/pam-util.c
++++ b/src/shared/pam-util.c
+@@ -383,11 +383,7 @@ int dlopen_libpam(int log_level) {
+ #if HAVE_PAM
+         static void *libpam_dl = NULL;
+ 
+-        SD_ELF_NOTE_DLOPEN(
+-                        "pam",
+-                        "Support for LinuxPAM",
+-                        SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED,
+-                        "libpam.so.0");
++        LIBPAM_NOTE(SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+ 
+         return dlopen_many_sym_or_warn(
+                         &libpam_dl,
+diff --git a/src/shared/pam-util.h b/src/shared/pam-util.h
+index ca3ed0c7c88a3..408c371e8d743 100644
+--- a/src/shared/pam-util.h
++++ b/src/shared/pam-util.h
+@@ -1,6 +1,8 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+ #pragma once
+ 
++#include "sd-dlopen.h"
++
+ #include "shared-forward.h"
+ 
+ #if HAVE_PAM
+@@ -104,6 +106,19 @@ int pam_prompt_graceful(pam_handle_t *pamh, int style, char **ret_response, cons
+  * and hands it to sym_pam_putenv(), then erases the buffer before freeing in case it carried a secret. */
+ int pam_putenv_assign(pam_handle_t *pamh, const char *name, const char *value);
+ 
++#define LIBPAM_NOTE(priority)                                           \
++        SD_ELF_NOTE_DLOPEN("pam",                                       \
++                           "Support for LinuxPAM",                      \
++                           priority,                                    \
++                           "libpam.so.0")
++
++#define DLOPEN_LIBPAM(log_level, priority)                              \
++        ({                                                              \
++                LIBPAM_NOTE(priority);                                  \
++                dlopen_libpam(log_level);                               \
++        })
++#else
++#define DLOPEN_LIBPAM(log_level, priority) dlopen_libpam(log_level)
+ #endif
+ 
+ int dlopen_libpam(int log_level);
+diff --git a/src/shared/seccomp-util.c b/src/shared/seccomp-util.c
+index d06dc4f82c15c..0ba0d6cd91c0f 100644
+--- a/src/shared/seccomp-util.c
++++ b/src/shared/seccomp-util.c
+@@ -2604,11 +2604,7 @@ int dlopen_libseccomp(int log_level) {
+ #if HAVE_SECCOMP
+         static void *libseccomp_dl = NULL;
+ 
+-        SD_ELF_NOTE_DLOPEN(
+-                        "seccomp",
+-                        "Support for Seccomp Sandboxes",
+-                        SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED,
+-                        "libseccomp.so.2");
++        LIBSECCOMP_NOTE(SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+ 
+         return dlopen_many_sym_or_warn(
+                         &libseccomp_dl,
+diff --git a/src/shared/seccomp-util.h b/src/shared/seccomp-util.h
+index 7037ef52d17d7..89dcaf5ca74b0 100644
+--- a/src/shared/seccomp-util.h
++++ b/src/shared/seccomp-util.h
+@@ -1,6 +1,8 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+ #pragma once
+ 
++#include "sd-dlopen.h"
++
+ #include "errno-util.h"
+ #include "shared-forward.h"
+ 
+@@ -155,6 +157,17 @@ int parse_syscall_and_errno(const char *in, char **name, int *error);
+ 
+ int seccomp_suppress_sync(void);
+ 
++#define LIBSECCOMP_NOTE(priority)                                       \
++        SD_ELF_NOTE_DLOPEN("seccomp",                                   \
++                           "Support for Seccomp Sandboxes",             \
++                           priority,                                    \
++                           "libseccomp.so.2")
++
++#define DLOPEN_LIBSECCOMP(log_level, priority)                          \
++        ({                                                              \
++                LIBSECCOMP_NOTE(priority);                              \
++                dlopen_libseccomp(log_level);                           \
++        })
+ #else
+ 
+ static inline bool is_seccomp_available(void) {
+@@ -162,6 +175,7 @@ static inline bool is_seccomp_available(void) {
+ }
+ 
+ 
++#define DLOPEN_LIBSECCOMP(log_level, priority) dlopen_libseccomp(log_level)
+ #endif
+ 
+ int dlopen_libseccomp(int log_level);
+diff --git a/src/shared/selinux-util.c b/src/shared/selinux-util.c
+index 81ec4a9ba6d28..eb1f28a814429 100644
+--- a/src/shared/selinux-util.c
++++ b/src/shared/selinux-util.c
+@@ -94,11 +94,7 @@ int dlopen_libselinux(int log_level) {
+ #if HAVE_SELINUX
+         static void *libselinux_dl = NULL;
+ 
+-        SD_ELF_NOTE_DLOPEN(
+-                        "selinux",
+-                        "Support for SELinux",
+-                        SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED,
+-                        "libselinux.so.1");
++        LIBSELINUX_NOTE(SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+ 
+         return dlopen_many_sym_or_warn(
+                         &libselinux_dl,
+diff --git a/src/shared/selinux-util.h b/src/shared/selinux-util.h
+index f73503bc4b29e..98cfb6bbe40b4 100644
+--- a/src/shared/selinux-util.h
++++ b/src/shared/selinux-util.h
+@@ -3,6 +3,8 @@
+ 
+ #include <sys/socket.h>
+ 
++#include "sd-dlopen.h"
++
+ #include "shared-forward.h"
+ 
+ #if HAVE_SELINUX
+@@ -50,12 +52,25 @@ extern DLSYM_PROTOTYPE(string_to_security_class);
+ 
+ DEFINE_TRIVIAL_CLEANUP_FUNC_FULL_RENAME(char*, sym_freecon, freeconp, NULL);
+ 
++#define LIBSELINUX_NOTE(priority)                                       \
++        SD_ELF_NOTE_DLOPEN("selinux",                                   \
++                           "Support for SELinux",                       \
++                           priority,                                    \
++                           "libselinux.so.1")
++
++#define DLOPEN_LIBSELINUX(log_level, priority)                          \
++        ({                                                              \
++                LIBSELINUX_NOTE(priority);                              \
++                dlopen_libselinux(log_level);                           \
++        })
+ #else
+ 
+ 
+ static inline void freeconp(char **p) {
+         assert(*p == NULL);
+ }
++
++#define DLOPEN_LIBSELINUX(log_level, priority) dlopen_libselinux(log_level)
+ #endif
+ 
+ int dlopen_libselinux(int log_level);
+diff --git a/src/shared/ssl-util.c b/src/shared/ssl-util.c
+index 7b9314be96337..ce51c8cc598d2 100644
+--- a/src/shared/ssl-util.c
++++ b/src/shared/ssl-util.c
+@@ -36,11 +36,7 @@ int dlopen_libssl(int log_level) {
+ #if HAVE_OPENSSL
+         static void *libssl_dl = NULL;
+ 
+-        SD_ELF_NOTE_DLOPEN(
+-                        "libssl",
+-                        "Support for TLS",
+-                        SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED,
+-                        "libssl.so.3");
++        LIBSSL_NOTE(SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED);
+ 
+         return dlopen_many_sym_or_warn(
+                         &libssl_dl,
+diff --git a/src/shared/ssl-util.h b/src/shared/ssl-util.h
+index 7deb028cfe3de..80c56fcbe1653 100644
+--- a/src/shared/ssl-util.h
++++ b/src/shared/ssl-util.h
+@@ -1,11 +1,24 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+ #pragma once
+ 
++#include "sd-dlopen.h"
++
+ #include "shared-forward.h"
+ 
+ int dlopen_libssl(int log_level);
+ 
+ #if HAVE_OPENSSL
++#define LIBSSL_NOTE(priority)                                           \
++        SD_ELF_NOTE_DLOPEN("libssl",                                    \
++                           "Support for TLS",                           \
++                           priority,                                    \
++                           "libssl.so.3")
++
++#define DLOPEN_LIBSSL(log_level, priority)                              \
++        ({                                                              \
++                LIBSSL_NOTE(priority);                                  \
++                dlopen_libssl(log_level);                               \
++        })
+ 
+ #  include <openssl/ssl.h>              /* IWYU pragma: export */
+ 
+@@ -43,4 +56,6 @@ extern DLSYM_PROTOTYPE(TLS_client_method);
+ 
+ DEFINE_TRIVIAL_CLEANUP_FUNC_FULL_RENAME(SSL*, sym_SSL_free, SSL_freep, NULL);
+ 
++#else
++#define DLOPEN_LIBSSL(log_level, priority) dlopen_libssl(log_level)
+ #endif
+diff --git a/src/shared/tpm2-util.c b/src/shared/tpm2-util.c
+index 3f29730c7f8cb..2e2c5d03b5ad9 100644
+--- a/src/shared/tpm2-util.c
++++ b/src/shared/tpm2-util.c
+@@ -124,11 +124,7 @@ static int dlopen_tpm2_esys(int log_level) {
+         static void *libtss2_esys_dl = NULL;
+         int r;
+ 
+-        SD_ELF_NOTE_DLOPEN(
+-                        "tpm",
+-                        "Support for TPM",
+-                        SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED,
+-                        "libtss2-esys.so.0");
++        TPM2_ESYS_NOTE(SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED);
+ 
+         r = dlopen_many_sym_or_warn(
+                         &libtss2_esys_dl, "libtss2-esys.so.0", log_level,
+@@ -190,11 +186,7 @@ static int dlopen_tpm2_esys(int log_level) {
+ static int dlopen_tpm2_rc(int log_level) {
+         static void *libtss2_rc_dl = NULL;
+ 
+-        SD_ELF_NOTE_DLOPEN(
+-                        "tpm",
+-                        "Support for TPM",
+-                        SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED,
+-                        "libtss2-rc.so.0");
++        TPM2_RC_NOTE(SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED);
+ 
+         return dlopen_many_sym_or_warn(
+                         &libtss2_rc_dl, "libtss2-rc.so.0", log_level,
+@@ -204,11 +196,7 @@ static int dlopen_tpm2_rc(int log_level) {
+ static int dlopen_tpm2_mu(int log_level) {
+         static void *libtss2_mu_dl = NULL;
+ 
+-        SD_ELF_NOTE_DLOPEN(
+-                        "tpm",
+-                        "Support for TPM",
+-                        SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED,
+-                        "libtss2-mu.so.0");
++        TPM2_MU_NOTE(SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED);
+ 
+         return dlopen_many_sym_or_warn(
+                         &libtss2_mu_dl, "libtss2-mu.so.0", log_level,
+@@ -239,11 +227,7 @@ static int dlopen_tpm2_tcti_device(int log_level) {
+         /* The "device" TCTI is the most relevant one, let's also load it explicitly on dlopen_tpm2(), even
+          * if we don't resolve any symbols here. */
+ 
+-        SD_ELF_NOTE_DLOPEN(
+-                        "tpm",
+-                        "Support for TPM",
+-                        SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED,
+-                        "libtss2-tcti-device.so.0");
++        TPM2_TCTI_DEVICE_NOTE(SD_ELF_NOTE_DLOPEN_PRIORITY_SUGGESTED);
+ 
+         return dlopen_verbose(
+                         &libtss2_tcti_device_dl,
+diff --git a/src/shared/tpm2-util.h b/src/shared/tpm2-util.h
+index bc26a16947ad1..4d62702ce1ff4 100644
+--- a/src/shared/tpm2-util.h
++++ b/src/shared/tpm2-util.h
+@@ -1,6 +1,8 @@
+ /* SPDX-License-Identifier: LGPL-2.1-or-later */
+ #pragma once
+ 
++#include "sd-dlopen.h"
++
+ #include "bitfield.h"
+ #include "iovec-util.h"
+ #include "shared-forward.h"
+@@ -43,6 +45,28 @@ static inline bool TPM2_PCR_MASK_VALID(uint32_t pcr_mask) {
+ int dlopen_tpm2(int log_level);
+ 
+ #if HAVE_TPM2
++#define TPM2_ESYS_NOTE(priority) \
++        SD_ELF_NOTE_DLOPEN("tpm", "Support for TPM", priority, "libtss2-esys.so.0")
++#define TPM2_RC_NOTE(priority) \
++        SD_ELF_NOTE_DLOPEN("tpm", "Support for TPM", priority, "libtss2-rc.so.0")
++#define TPM2_MU_NOTE(priority) \
++        SD_ELF_NOTE_DLOPEN("tpm", "Support for TPM", priority, "libtss2-mu.so.0")
++#define TPM2_TCTI_DEVICE_NOTE(priority) \
++        SD_ELF_NOTE_DLOPEN("tpm", "Support for TPM", priority, "libtss2-tcti-device.so.0")
++
++#define TPM2_NOTE(priority)                                             \
++        ({                                                              \
++                TPM2_ESYS_NOTE(priority);                               \
++                TPM2_RC_NOTE(priority);                                 \
++                TPM2_MU_NOTE(priority);                                 \
++                TPM2_TCTI_DEVICE_NOTE(priority);                        \
++        })
++
++#define DLOPEN_TPM2(log_level, priority)                                \
++        ({                                                              \
++                TPM2_NOTE(priority);                                    \
++                dlopen_tpm2(log_level);                                 \
++        })
+ 
+ #include <tss2/tss2_esys.h>     /* IWYU pragma: export */
+ #include <tss2/tss2_mu.h>       /* IWYU pragma: export */
+@@ -413,6 +437,7 @@ static inline int tpm2_pcrlock_search_file(const char *path, FILE **ret_file, ch
+         return -ENOENT;
+ }
+ 
++#define DLOPEN_TPM2(log_level, priority) dlopen_tpm2(log_level)
+ #endif /* HAVE_TPM2 */
+ 
+ int tpm2_list_devices(bool legend, bool quiet);
+
+From b0ede9f9eebf3f5507e6b3cef9e1de33af7cea68 Mon Sep 17 00:00:00 2001
+From: Luca Boccassi <luca.boccassi@gmail.com>
+Date: Sat, 30 May 2026 22:51:59 +0100
+Subject: [PATCH 3/3] tree-wide: convert dlopen_*() callers to DLOPEN_* wrapper
+ macros
+
+Switch the executable-owned call sites from the plain dlopen_<lib>()
+helpers to the new DLOPEN_<LIB>() macros, so that each binary that loads
+an optional library at runtime now carries its own .note.dlopen note
+instead of relying solely on libsystemd-shared. Each call site passes a
+priority reflecting whether it hard-depends on the library (required) or
+degrades gracefully without it (recommended).
+
+Co-developed-by: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ src/analyze/analyze-security.c                |  4 ++--
+ src/bootctl/bootctl-install.c                 |  2 +-
+ src/core/bpf-bind-iface.c                     |  2 +-
+ src/core/bpf-restrict-fs.c                    |  2 +-
+ src/core/bpf-restrict-fsaccess.c              |  4 ++--
+ src/core/bpf-restrict-ifaces.c                |  2 +-
+ src/core/bpf-socket-bind.c                    |  2 +-
+ src/core/exec-invoke.c                        | 14 ++++++------
+ src/core/execute.c                            |  6 ++---
+ src/core/main.c                               |  2 +-
+ src/core/mount.c                              |  2 +-
+ src/core/namespace.c                          |  2 +-
+ src/core/selinux-setup.c                      |  2 +-
+ src/creds/creds.c                             |  2 +-
+ src/cryptenroll/cryptenroll.c                 |  2 +-
+ .../cryptsetup-token-systemd-fido2.c          |  6 ++---
+ .../cryptsetup-token-systemd-pkcs11.c         |  6 ++---
+ .../cryptsetup-token-systemd-tpm2.c           |  6 ++---
+ src/cryptsetup/cryptsetup.c                   |  4 ++--
+ src/dissect/dissect.c                         |  2 +-
+ src/growfs/growfs.c                           |  2 +-
+ src/home/homectl.c                            |  2 +-
+ src/home/homed-manager.c                      |  2 +-
+ src/home/homework-fscrypt.c                   |  8 +++----
+ src/home/homework-luks.c                      | 22 +++++++++----------
+ src/home/homework.c                           |  2 +-
+ src/home/pam_systemd_home.c                   | 20 ++++++++---------
+ src/imds/imdsd.c                              |  2 +-
+ src/import/import-common.c                    |  4 ++--
+ src/import/pull-job.c                         |  2 +-
+ src/integritysetup/integritysetup.c           |  2 +-
+ src/journal-remote/journal-gatewayd.c         |  2 +-
+ src/journal-remote/journal-remote-main.c      |  2 +-
+ src/journal-remote/journal-upload.c           |  2 +-
+ src/keyutil/keyutil.c                         |  2 +-
+ src/login/pam_systemd.c                       |  4 ++--
+ src/login/pam_systemd_loadkey.c               |  2 +-
+ src/measure/measure-tool.c                    |  4 ++--
+ src/network/networkd-sysctl.c                 |  2 +-
+ src/nspawn/nspawn-oci.c                       |  2 +-
+ src/nspawn/nspawn.c                           |  6 ++---
+ src/nsresourced/userns-restrict.c             |  2 +-
+ src/pcrextend/pcrextend.c                     |  2 +-
+ src/pcrlock/pcrlock.c                         |  2 +-
+ src/portable/portable.c                       |  4 ++--
+ src/repart/repart.c                           | 16 +++++++-------
+ src/report/report-upload.c                    |  2 +-
+ src/resolve/resolved-dns-dnssec.c             |  6 ++---
+ src/resolve/resolved-dnstls.c                 |  4 ++--
+ src/resolve/resolved-util.c                   |  2 +-
+ src/sbsign/sbsign.c                           |  2 +-
+ src/shutdown/detach-swap.c                    |  2 +-
+ src/sysext/sysext.c                           |  8 +++----
+ src/sysupdate/sysupdate-partition.c           |  4 ++--
+ src/sysupdate/sysupdate-resource.c            |  2 +-
+ src/test/test-bpf-restrict-fsaccess.c         |  2 +-
+ src/test/test-bpf-token.c                     |  2 +-
+ src/tmpfiles/tmpfiles.c                       |  4 ++--
+ src/tpm2-setup/tpm2-setup.c                   |  2 +-
+ src/udev/udev-builtin-blkid.c                 |  2 +-
+ src/udev/udevd.c                              | 10 ++++-----
+ src/validatefs/validatefs.c                   |  2 +-
+ src/veritysetup/veritysetup.c                 |  2 +-
+ 63 files changed, 127 insertions(+), 127 deletions(-)
+
+diff --git a/src/analyze/analyze-security.c b/src/analyze/analyze-security.c
+index fdeaf69e17446..7f8576e52a5f4 100644
+--- a/src/analyze/analyze-security.c
++++ b/src/analyze/analyze-security.c
+@@ -605,7 +605,7 @@ static int assess_system_call_filter(
+         uint64_t b;
+         int r;
+ 
+-        r = dlopen_libseccomp(LOG_DEBUG);
++        r = DLOPEN_LIBSECCOMP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0) {
+                 *ret_badness = UINT64_MAX;
+                 *ret_description = NULL;
+@@ -2578,7 +2578,7 @@ static int get_security_info(Unit *u, ExecContext *c, CGroupContext *g, Security
+                 info->_umask = c->umask;
+ 
+ #if HAVE_SECCOMP
+-                if (dlopen_libseccomp(LOG_DEBUG) >= 0) {
++                if (DLOPEN_LIBSECCOMP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED) >= 0) {
+                         SET_FOREACH(key, c->syscall_archs) {
+                                 const char *name;
+ 
+diff --git a/src/bootctl/bootctl-install.c b/src/bootctl/bootctl-install.c
+index 5fd65e02f15d9..c16d3939aca75 100644
+--- a/src/bootctl/bootctl-install.c
++++ b/src/bootctl/bootctl-install.c
+@@ -1082,7 +1082,7 @@ static int install_secure_boot_auto_enroll(InstallContext *c) {
+         if (!c->secure_boot_certificate || !c->secure_boot_private_key)
+                 return 0;
+ 
+-        r = dlopen_libcrypto(LOG_DEBUG);
++        r = DLOPEN_LIBCRYPTO(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/core/bpf-bind-iface.c b/src/core/bpf-bind-iface.c
+index 1ba643a1166b3..6d9ecadcec732 100644
+--- a/src/core/bpf-bind-iface.c
++++ b/src/core/bpf-bind-iface.c
+@@ -31,7 +31,7 @@ int bpf_bind_network_interface_supported(void) {
+         if (supported >= 0)
+                 return supported;
+ 
+-        if (dlopen_bpf(LOG_WARNING) < 0)
++        if (DLOPEN_BPF(LOG_WARNING, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED) < 0)
+                 return (supported = false);
+ 
+         obj = bind_iface_bpf__open();
+diff --git a/src/core/bpf-restrict-fs.c b/src/core/bpf-restrict-fs.c
+index d28abfe4dd163..93f7b800b5b57 100644
+--- a/src/core/bpf-restrict-fs.c
++++ b/src/core/bpf-restrict-fs.c
+@@ -78,7 +78,7 @@ bool bpf_restrict_fs_supported(bool initialize) {
+         if (!initialize)
+                 return false;
+ 
+-        if (dlopen_bpf(LOG_WARNING) < 0)
++        if (DLOPEN_BPF(LOG_WARNING, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED) < 0)
+                 return (supported = false);
+ 
+         r = lsm_supported("bpf");
+diff --git a/src/core/bpf-restrict-fsaccess.c b/src/core/bpf-restrict-fsaccess.c
+index e043bf9fd66ef..4e0af5596af29 100644
+--- a/src/core/bpf-restrict-fsaccess.c
++++ b/src/core/bpf-restrict-fsaccess.c
+@@ -168,7 +168,7 @@ bool bpf_restrict_fsaccess_supported(void) {
+ 
+         if (supported >= 0)
+                 return supported;
+-        if (dlopen_bpf(LOG_WARNING) < 0)
++        if (DLOPEN_BPF(LOG_WARNING, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED) < 0)
+                 return (supported = false);
+ 
+         r = lsm_supported("bpf");
+@@ -338,7 +338,7 @@ static int restrict_fsaccess_validate_deserialized_fds(Manager *m) {
+ 
+         assert(m);
+ 
+-        r = dlopen_bpf(LOG_WARNING);
++        r = DLOPEN_BPF(LOG_WARNING, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return log_error_errno(SYNTHETIC_ERRNO(ENOTRECOVERABLE),
+                                        "bpf-restrict-fsaccess: Failed to load libbpf for FD validation, aborting.");
+diff --git a/src/core/bpf-restrict-ifaces.c b/src/core/bpf-restrict-ifaces.c
+index e30d15cd256ef..9ca144a334edb 100644
+--- a/src/core/bpf-restrict-ifaces.c
++++ b/src/core/bpf-restrict-ifaces.c
+@@ -86,7 +86,7 @@ int bpf_restrict_ifaces_supported(void) {
+         if (supported >= 0)
+                 return supported;
+ 
+-        if (dlopen_bpf(LOG_WARNING) < 0)
++        if (DLOPEN_BPF(LOG_WARNING, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED) < 0)
+                 return (supported = false);
+ 
+         r = prepare_restrict_ifaces_bpf(NULL, true, NULL, &obj);
+diff --git a/src/core/bpf-socket-bind.c b/src/core/bpf-socket-bind.c
+index b4bf37b41e0f4..3751d62430864 100644
+--- a/src/core/bpf-socket-bind.c
++++ b/src/core/bpf-socket-bind.c
+@@ -125,7 +125,7 @@ int bpf_socket_bind_supported(void) {
+         _cleanup_(socket_bind_bpf_freep) struct socket_bind_bpf *obj = NULL;
+         int r;
+ 
+-        if (dlopen_bpf(LOG_WARNING) < 0)
++        if (DLOPEN_BPF(LOG_WARNING, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED) < 0)
+                 return false;
+ 
+         r = prepare_socket_bind_bpf(/* unit= */ NULL, /* allow_rules= */ NULL, /* deny_rules= */ NULL, &obj);
+diff --git a/src/core/exec-invoke.c b/src/core/exec-invoke.c
+index 7c16ffc7f030e..f6d44a162953c 100644
+--- a/src/core/exec-invoke.c
++++ b/src/core/exec-invoke.c
+@@ -1313,7 +1313,7 @@ static int setup_pam(
+          * parent process will exec() the actual daemon. We do things this way to ensure that the main PID of
+          * the daemon is the one we initially fork()ed. */
+ 
+-        r = dlopen_libpam(LOG_ERR);
++        r = DLOPEN_LIBPAM(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+@@ -1579,7 +1579,7 @@ static bool seccomp_allows_drop_privileges(const ExecContext *c) {
+         assert(c);
+ 
+         /* No libseccomp, all is fine */
+-        if (dlopen_libseccomp(LOG_DEBUG) < 0)
++        if (DLOPEN_LIBSECCOMP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED) < 0)
+                 return true;
+ 
+         /* No syscall filter, we are allowed to drop privileges */
+@@ -1889,7 +1889,7 @@ static int apply_restrict_filesystems(const ExecContext *c, const ExecParameters
+         }
+ 
+         /* We are in a new binary, so dl-open again */
+-        r = dlopen_bpf(LOG_DEBUG);
++        r = DLOPEN_BPF(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+@@ -5998,10 +5998,10 @@ int exec_invoke(
+         }
+ 
+         /* Load a bunch of libraries we'll possibly need later, before we turn off dlopen() */
+-        (void) dlopen_bpf(LOG_DEBUG);
+-        (void) dlopen_cryptsetup(LOG_DEBUG);
+-        (void) dlopen_libmount(LOG_DEBUG);
+-        (void) dlopen_libseccomp(LOG_DEBUG);
++        (void) DLOPEN_BPF(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
++        (void) DLOPEN_CRYPTSETUP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
++        (void) DLOPEN_LIBMOUNT(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
++        (void) DLOPEN_LIBSECCOMP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+ 
+         /* Let's now disable further dlopen()ing of libraries, since we are about to do namespace
+          * shenanigans, and do not want to mix resources from host and namespace */
+diff --git a/src/core/execute.c b/src/core/execute.c
+index ff6ef2de0457c..4a95473e46f4f 100644
+--- a/src/core/execute.c
++++ b/src/core/execute.c
+@@ -1576,7 +1576,7 @@ void exec_context_dump(const ExecContext *c, FILE* f, const char *prefix) {
+                         fputc('~', f);
+ 
+ #if HAVE_SECCOMP
+-                if (dlopen_libseccomp(LOG_DEBUG) >= 0) {
++                if (DLOPEN_LIBSECCOMP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED) >= 0) {
+                         void *id, *val;
+                         bool first = true;
+                         HASHMAP_FOREACH_KEY(val, id, c->syscall_filter) {
+@@ -1995,7 +1995,7 @@ char** exec_context_get_syscall_filter(const ExecContext *c) {
+         assert(c);
+ 
+ #if HAVE_SECCOMP
+-        if (dlopen_libseccomp(LOG_DEBUG) < 0)
++        if (DLOPEN_LIBSECCOMP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED) < 0)
+                 return strv_new(NULL);
+ 
+         void *id, *val;
+@@ -2064,7 +2064,7 @@ char** exec_context_get_syscall_log(const ExecContext *c) {
+         assert(c);
+ 
+ #if HAVE_SECCOMP
+-        if (dlopen_libseccomp(LOG_DEBUG) < 0)
++        if (DLOPEN_LIBSECCOMP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED) < 0)
+                 return strv_new(NULL);
+ 
+         void *id, *val;
+diff --git a/src/core/main.c b/src/core/main.c
+index 7815691133c66..92eca9462b0ee 100644
+--- a/src/core/main.c
++++ b/src/core/main.c
+@@ -3690,7 +3690,7 @@ int main(int argc, char *argv[]) {
+         }
+ 
+         /* Building without libmount is allowed, but if it is compiled in, then we must be able to load it */
+-        r = dlopen_libmount(LOG_DEBUG);
++        r = DLOPEN_LIBMOUNT(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0 && !ERRNO_IS_NEG_NOT_SUPPORTED(r)) {
+                 error_message = "Failed to load libmount.so";
+                 goto finish;
+diff --git a/src/core/mount.c b/src/core/mount.c
+index 4d5cd35fae60b..94aeea9f6c974 100644
+--- a/src/core/mount.c
++++ b/src/core/mount.c
+@@ -2408,7 +2408,7 @@ static int mount_test_startable(Unit *u) {
+ }
+ 
+ static bool mount_supported(void) {
+-        return dlopen_libmount(LOG_DEBUG) >= 0;
++        return DLOPEN_LIBMOUNT(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED) >= 0;
+ }
+ 
+ static int mount_subsystem_ratelimited(Manager *m) {
+diff --git a/src/core/namespace.c b/src/core/namespace.c
+index 49635d3e9528a..a6ba2659e4290 100644
+--- a/src/core/namespace.c
++++ b/src/core/namespace.c
+@@ -3984,7 +3984,7 @@ int refresh_extensions_in_namespace(
+         if (r > 0)
+                 return log_debug_errno(SYNTHETIC_ERRNO(EINVAL), "Target namespace is not separate, cannot reload extensions");
+ 
+-        (void) dlopen_cryptsetup(LOG_DEBUG);
++        (void) DLOPEN_CRYPTSETUP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+ 
+         extension_dir = path_join(p->private_namespace_dir, "unit-extensions");
+         if (!extension_dir)
+diff --git a/src/core/selinux-setup.c b/src/core/selinux-setup.c
+index d06c9f0293167..886b00cbf564b 100644
+--- a/src/core/selinux-setup.c
++++ b/src/core/selinux-setup.c
+@@ -17,7 +17,7 @@ int mac_selinux_setup(bool *loaded_policy) {
+ 
+         assert(loaded_policy);
+ 
+-        r = dlopen_libselinux(LOG_DEBUG);
++        r = DLOPEN_LIBSELINUX(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return 0;
+ 
+diff --git a/src/creds/creds.c b/src/creds/creds.c
+index c382a0cf80a76..6dc4ea9277d0a 100644
+--- a/src/creds/creds.c
++++ b/src/creds/creds.c
+@@ -188,7 +188,7 @@ static int is_tmpfs_with_noswap(dev_t devno) {
+         _cleanup_(mnt_free_tablep) struct libmnt_table *table = NULL;
+         int r;
+ 
+-        r = dlopen_libmount(LOG_DEBUG);
++        r = DLOPEN_LIBMOUNT(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/cryptenroll/cryptenroll.c b/src/cryptenroll/cryptenroll.c
+index bcc4b6cca66cd..eed0a11aeba75 100644
+--- a/src/cryptenroll/cryptenroll.c
++++ b/src/cryptenroll/cryptenroll.c
+@@ -780,7 +780,7 @@ static int run(int argc, char *argv[]) {
+         if (r <= 0)
+                 return r;
+ 
+-        r = dlopen_cryptsetup(LOG_ERR);
++        r = DLOPEN_CRYPTSETUP(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/cryptsetup/cryptsetup-tokens/cryptsetup-token-systemd-fido2.c b/src/cryptsetup/cryptsetup-tokens/cryptsetup-token-systemd-fido2.c
+index 0265b2d5a0393..0bfe0c2ec7797 100644
+--- a/src/cryptsetup/cryptsetup-tokens/cryptsetup-token-systemd-fido2.c
++++ b/src/cryptsetup/cryptsetup-tokens/cryptsetup-token-systemd-fido2.c
+@@ -38,7 +38,7 @@ _public_ int cryptsetup_token_open_pin(
+         assert(pin || pin_size == 0);
+         assert(token >= 0);
+ 
+-        r = dlopen_cryptsetup(LOG_DEBUG);
++        r = DLOPEN_CRYPTSETUP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+@@ -103,7 +103,7 @@ _public_ void cryptsetup_token_dump(
+ 
+         assert(json);
+ 
+-        if (dlopen_cryptsetup(LOG_DEBUG) < 0)
++        if (DLOPEN_CRYPTSETUP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED) < 0)
+                 return;
+ 
+         r = parse_luks2_fido2_data(cd, json, &rp_id, &salt, &salt_size, &cid, &cid_size, &required);
+@@ -170,7 +170,7 @@ _public_ int cryptsetup_token_validate(
+ 
+         assert(json);
+ 
+-        r = dlopen_cryptsetup(LOG_DEBUG);
++        r = DLOPEN_CRYPTSETUP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/cryptsetup/cryptsetup-tokens/cryptsetup-token-systemd-pkcs11.c b/src/cryptsetup/cryptsetup-tokens/cryptsetup-token-systemd-pkcs11.c
+index 9a279ddbb7e09..63be8a7c64a76 100644
+--- a/src/cryptsetup/cryptsetup-tokens/cryptsetup-token-systemd-pkcs11.c
++++ b/src/cryptsetup/cryptsetup-tokens/cryptsetup-token-systemd-pkcs11.c
+@@ -37,7 +37,7 @@ _public_ int cryptsetup_token_open_pin(
+         assert(pin || pin_size == 0);
+         assert(token >= 0);
+ 
+-        r = dlopen_cryptsetup(LOG_DEBUG);
++        r = DLOPEN_CRYPTSETUP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+@@ -95,7 +95,7 @@ _public_ void cryptsetup_token_dump(
+         _cleanup_free_ void *pkcs11_key = NULL;
+         Pkcs11RsaPadding rsa_padding = PKCS11_RSA_PADDING_PKCS1V15;
+ 
+-        if (dlopen_cryptsetup(LOG_DEBUG) < 0)
++        if (DLOPEN_CRYPTSETUP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED) < 0)
+                 return;
+ 
+         r = parse_luks2_pkcs11_data(cd, json, &pkcs11_uri, &pkcs11_key, &pkcs11_key_size, &rsa_padding);
+@@ -125,7 +125,7 @@ _public_ int cryptsetup_token_validate(
+         sd_json_variant *w;
+         _cleanup_(sd_json_variant_unrefp) sd_json_variant *v = NULL;
+ 
+-        r = dlopen_cryptsetup(LOG_DEBUG);
++        r = DLOPEN_CRYPTSETUP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/cryptsetup/cryptsetup-tokens/cryptsetup-token-systemd-tpm2.c b/src/cryptsetup/cryptsetup-tokens/cryptsetup-token-systemd-tpm2.c
+index ad14942622fef..70113268b6102 100644
+--- a/src/cryptsetup/cryptsetup-tokens/cryptsetup-token-systemd-tpm2.c
++++ b/src/cryptsetup/cryptsetup-tokens/cryptsetup-token-systemd-tpm2.c
+@@ -61,7 +61,7 @@ _public_ int cryptsetup_token_open_pin(
+         assert(ret_password);
+         assert(ret_password_len);
+ 
+-        r = dlopen_cryptsetup(LOG_DEBUG);
++        r = DLOPEN_CRYPTSETUP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+@@ -191,7 +191,7 @@ _public_ void cryptsetup_token_dump(
+ 
+         assert(json);
+ 
+-        if (dlopen_cryptsetup(LOG_DEBUG) < 0)
++        if (DLOPEN_CRYPTSETUP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED) < 0)
+                 return;
+ 
+         r = sd_json_parse(json, SD_JSON_PARSE_MUST_BE_OBJECT, &v, /* reterr_line= */ NULL, /* reterr_column= */ NULL);
+@@ -283,7 +283,7 @@ _public_ int cryptsetup_token_validate(
+ 
+         assert(json);
+ 
+-        r = dlopen_cryptsetup(LOG_DEBUG);
++        r = DLOPEN_CRYPTSETUP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/cryptsetup/cryptsetup.c b/src/cryptsetup/cryptsetup.c
+index 0f0d96372eb5d..39562019e483b 100644
+--- a/src/cryptsetup/cryptsetup.c
++++ b/src/cryptsetup/cryptsetup.c
+@@ -538,7 +538,7 @@ static int parse_one_option(const char *option) {
+ #if HAVE_OPENSSL
+                 _cleanup_strv_free_ char **l = NULL;
+ 
+-                r = dlopen_libcrypto(LOG_ERR);
++                r = DLOPEN_LIBCRYPTO(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+                 if (r < 0)
+                         return r;
+ 
+@@ -2881,7 +2881,7 @@ static int run(int argc, char *argv[]) {
+         if (r <= 0)
+                 return r;
+ 
+-        r = dlopen_cryptsetup(LOG_ERR);
++        r = DLOPEN_CRYPTSETUP(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/dissect/dissect.c b/src/dissect/dissect.c
+index c79609f583c5a..d30749117cea1 100644
+--- a/src/dissect/dissect.c
++++ b/src/dissect/dissect.c
+@@ -493,7 +493,7 @@ static int parse_argv(int argc, char *argv[]) {
+                         break;
+ 
+                 OPTION_LONG("make-archive", NULL, "Convert the DDI to an archive file"):
+-                        r = dlopen_libarchive(LOG_ERR);
++                        r = DLOPEN_LIBARCHIVE(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+                         if (r < 0)
+                                 return r;
+ 
+diff --git a/src/growfs/growfs.c b/src/growfs/growfs.c
+index 30d371200d47f..ee8f8eebd205a 100644
+--- a/src/growfs/growfs.c
++++ b/src/growfs/growfs.c
+@@ -33,7 +33,7 @@ static int resize_crypt_luks_device(dev_t devno, const char *fstype, dev_t main_
+         uint64_t size;
+         int r;
+ 
+-        r = dlopen_cryptsetup(LOG_ERR);
++        r = DLOPEN_CRYPTSETUP(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/home/homectl.c b/src/home/homectl.c
+index a90b517416c0d..95c5e101ed0ac 100644
+--- a/src/home/homectl.c
++++ b/src/home/homectl.c
+@@ -2482,7 +2482,7 @@ static int verb_list_signing_keys(int argc, char *argv[], uintptr_t _data, void
+                         /* Let's decode the PEM key to DER (so that we lose prefix/suffix), then truncate it
+                          * for display reasons. */
+ 
+-                        r = dlopen_libcrypto(LOG_DEBUG);
++                        r = DLOPEN_LIBCRYPTO(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+                         if (r < 0)
+                                 return r;
+ 
+diff --git a/src/home/homed-manager.c b/src/home/homed-manager.c
+index 0fcf7b9395e91..8ae56476d6312 100644
+--- a/src/home/homed-manager.c
++++ b/src/home/homed-manager.c
+@@ -1537,7 +1537,7 @@ int manager_startup(Manager *m) {
+ 
+         assert(m);
+ 
+-        r = dlopen_libcrypto(LOG_ERR);
++        r = DLOPEN_LIBCRYPTO(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/home/homework-fscrypt.c b/src/home/homework-fscrypt.c
+index 432f5d8678a88..6f51f49328954 100644
+--- a/src/home/homework-fscrypt.c
++++ b/src/home/homework-fscrypt.c
+@@ -232,7 +232,7 @@ static int fscrypt_slot_try_v1(
+         assert(encrypted_size > 0);
+         assert(match_key_descriptor);
+ 
+-        r = dlopen_libcrypto(LOG_ERR);
++        r = DLOPEN_LIBCRYPTO(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+@@ -331,7 +331,7 @@ static int fscrypt_slot_try_v2(
+         assert(iovec_is_set(tag));
+         assert(match_key_descriptor);
+ 
+-        r = dlopen_libcrypto(LOG_ERR);
++        r = DLOPEN_LIBCRYPTO(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+@@ -700,7 +700,7 @@ static int fscrypt_slot_set(
+         size_t encrypted_size;
+         ssize_t ss;
+ 
+-        r = dlopen_libcrypto(LOG_ERR);
++        r = DLOPEN_LIBCRYPTO(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+@@ -813,7 +813,7 @@ int home_create_fscrypt(
+         assert(setup);
+         assert(ret_home);
+ 
+-        r = dlopen_libcrypto(LOG_ERR);
++        r = DLOPEN_LIBCRYPTO(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/home/homework-luks.c b/src/home/homework-luks.c
+index 9cd0f2dc00438..4a56551b9cf47 100644
+--- a/src/home/homework-luks.c
++++ b/src/home/homework-luks.c
+@@ -146,7 +146,7 @@ static int probe_file_system_by_fd(
+         assert(ret_fstype);
+         assert(ret_uuid);
+ 
+-        r = dlopen_libblkid(LOG_DEBUG);
++        r = DLOPEN_LIBBLKID(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+@@ -529,7 +529,7 @@ static int acquire_open_luks_device(
+         assert(setup);
+         assert(!setup->crypt_device);
+ 
+-        r = dlopen_cryptsetup(LOG_DEBUG);
++        r = DLOPEN_CRYPTSETUP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+@@ -684,7 +684,7 @@ static int luks_validate(
+         assert(ret_size);
+         assert(sector_size > 0);
+ 
+-        r = dlopen_libblkid(LOG_DEBUG);
++        r = DLOPEN_LIBBLKID(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+@@ -805,7 +805,7 @@ static int crypt_device_to_evp_cipher(struct crypt_device *cd, const EVP_CIPHER
+         assert(cd);
+         assert(ret);
+ 
+-        r = dlopen_libcrypto(LOG_ERR);
++        r = DLOPEN_LIBCRYPTO(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+@@ -1293,7 +1293,7 @@ int home_setup_luks(
+         assert(setup);
+         assert(user_record_storage(h) == USER_LUKS);
+ 
+-        r = dlopen_cryptsetup(LOG_DEBUG);
++        r = DLOPEN_CRYPTSETUP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+@@ -1594,7 +1594,7 @@ int home_activate_luks(
+         assert(setup);
+         assert(ret_home);
+ 
+-        r = dlopen_cryptsetup(LOG_DEBUG);
++        r = DLOPEN_CRYPTSETUP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+@@ -2211,11 +2211,11 @@ int home_create_luks(
+         assert(setup->image_fd < 0);
+         assert(ret_home);
+ 
+-        r = dlopen_fdisk(LOG_DEBUG);
++        r = DLOPEN_FDISK(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+-        r = dlopen_cryptsetup(LOG_DEBUG);
++        r = DLOPEN_CRYPTSETUP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+@@ -3250,11 +3250,11 @@ int home_resize_luks(
+         assert(user_record_storage(h) == USER_LUKS);
+         assert(setup);
+ 
+-        r = dlopen_fdisk(LOG_DEBUG);
++        r = DLOPEN_FDISK(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+-        r = dlopen_cryptsetup(LOG_DEBUG);
++        r = DLOPEN_CRYPTSETUP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+@@ -3712,7 +3712,7 @@ int home_passwd_luks(
+         assert(user_record_storage(h) == USER_LUKS);
+         assert(setup);
+ 
+-        r = dlopen_cryptsetup(LOG_DEBUG);
++        r = DLOPEN_CRYPTSETUP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/home/homework.c b/src/home/homework.c
+index eecb91511c2af..a5fca5a11884d 100644
+--- a/src/home/homework.c
++++ b/src/home/homework.c
+@@ -1328,7 +1328,7 @@ static int determine_default_storage(UserStorage *ret) {
+                         if (r < 0)
+                                 log_warning_errno(r, "Failed to determine if %s is encrypted, ignoring: %m", get_home_root());
+ 
+-                        r = dlopen_cryptsetup(LOG_DEBUG);
++                        r = DLOPEN_CRYPTSETUP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+                         if (r < 0)
+                                 log_info("Not using '%s' storage, since libcryptsetup could not be loaded.", user_storage_to_string(USER_LUKS));
+                         else {
+diff --git a/src/home/pam_systemd_home.c b/src/home/pam_systemd_home.c
+index 6e24924e91cfc..abb75b9d92839 100644
+--- a/src/home/pam_systemd_home.c
++++ b/src/home/pam_systemd_home.c
+@@ -786,11 +786,11 @@ _public_ PAM_EXTERN int pam_sm_authenticate(
+         bool debug = false;
+         int r;
+ 
+-        r = dlopen_libpam(LOG_DEBUG);
++        r = DLOPEN_LIBPAM(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return PAM_SERVICE_ERR;
+ 
+-        (void) dlopen_libintl(LOG_DEBUG); /* best-effort: messages won't be translated if this fails */
++        (void) DLOPEN_LIBINTL(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED); /* best-effort: messages won't be translated if this fails */
+ 
+         pam_log_setup();
+ 
+@@ -853,11 +853,11 @@ _public_ PAM_EXTERN int pam_sm_open_session(
+         bool debug = false;
+         int r;
+ 
+-        r = dlopen_libpam(LOG_DEBUG);
++        r = DLOPEN_LIBPAM(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return PAM_SERVICE_ERR;
+ 
+-        (void) dlopen_libintl(LOG_DEBUG); /* best-effort: messages won't be translated if this fails */
++        (void) DLOPEN_LIBINTL(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED); /* best-effort: messages won't be translated if this fails */
+ 
+         pam_log_setup();
+ 
+@@ -912,11 +912,11 @@ _public_ PAM_EXTERN int pam_sm_close_session(
+         bool debug = false;
+         int r;
+ 
+-        r = dlopen_libpam(LOG_DEBUG);
++        r = DLOPEN_LIBPAM(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return PAM_SERVICE_ERR;
+ 
+-        (void) dlopen_libintl(LOG_DEBUG); /* best-effort: messages won't be translated if this fails */
++        (void) DLOPEN_LIBINTL(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED); /* best-effort: messages won't be translated if this fails */
+ 
+         pam_log_setup();
+ 
+@@ -979,11 +979,11 @@ _public_ PAM_EXTERN int pam_sm_acct_mgmt(
+         usec_t t;
+         int r;
+ 
+-        r = dlopen_libpam(LOG_DEBUG);
++        r = DLOPEN_LIBPAM(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return PAM_SERVICE_ERR;
+ 
+-        (void) dlopen_libintl(LOG_DEBUG); /* best-effort: messages won't be translated if this fails */
++        (void) DLOPEN_LIBINTL(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED); /* best-effort: messages won't be translated if this fails */
+ 
+         pam_log_setup();
+ 
+@@ -1100,11 +1100,11 @@ _public_ PAM_EXTERN int pam_sm_chauthtok(
+         bool debug = false;
+         int r;
+ 
+-        r = dlopen_libpam(LOG_DEBUG);
++        r = DLOPEN_LIBPAM(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return PAM_SERVICE_ERR;
+ 
+-        (void) dlopen_libintl(LOG_DEBUG); /* best-effort: messages won't be translated if this fails */
++        (void) DLOPEN_LIBINTL(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED); /* best-effort: messages won't be translated if this fails */
+ 
+         pam_log_setup();
+ 
+diff --git a/src/imds/imdsd.c b/src/imds/imdsd.c
+index e58e06b7b12d3..9959567f5f350 100644
+--- a/src/imds/imdsd.c
++++ b/src/imds/imdsd.c
+@@ -3065,7 +3065,7 @@ static int run(int argc, char* argv[]) {
+         if (r <= 0)
+                 return r;
+ 
+-        r = dlopen_curl(LOG_DEBUG);
++        r = DLOPEN_CURL(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/import/import-common.c b/src/import/import-common.c
+index 840eac210f869..c7465147c46b8 100644
+--- a/src/import/import-common.c
++++ b/src/import/import-common.c
+@@ -32,7 +32,7 @@ int import_fork_tar_x(int tree_fd, int userns_fd, PidRef *ret_pid) {
+         assert(tree_fd >= 0);
+         assert(ret_pid);
+ 
+-        r = dlopen_libarchive(LOG_DEBUG);
++        r = DLOPEN_LIBARCHIVE(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+@@ -99,7 +99,7 @@ int import_fork_tar_c(int tree_fd, int userns_fd, PidRef *ret_pid) {
+         assert(tree_fd >= 0);
+         assert(ret_pid);
+ 
+-        r = dlopen_libarchive(LOG_DEBUG);
++        r = DLOPEN_LIBARCHIVE(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/import/pull-job.c b/src/import/pull-job.c
+index 31d6d34af6bc7..7d83c994ff50a 100644
+--- a/src/import/pull-job.c
++++ b/src/import/pull-job.c
+@@ -282,7 +282,7 @@ static int pull_job_open_disk(PullJob *j) {
+         }
+ 
+         if (j->calc_checksum) {
+-                r = dlopen_libcrypto(LOG_ERR);
++                r = DLOPEN_LIBCRYPTO(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+                 if (r < 0)
+                         return r;
+ 
+diff --git a/src/integritysetup/integritysetup.c b/src/integritysetup/integritysetup.c
+index bdf1b25473bd4..619c3b10db50d 100644
+--- a/src/integritysetup/integritysetup.c
++++ b/src/integritysetup/integritysetup.c
+@@ -204,7 +204,7 @@ static int run(int argc, char *argv[]) {
+ 
+         log_setup();
+ 
+-        r = dlopen_cryptsetup(LOG_ERR);
++        r = DLOPEN_CRYPTSETUP(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/journal-remote/journal-gatewayd.c b/src/journal-remote/journal-gatewayd.c
+index e70fc4f6dbf37..9b1085bb4cd8a 100644
+--- a/src/journal-remote/journal-gatewayd.c
++++ b/src/journal-remote/journal-gatewayd.c
+@@ -1258,7 +1258,7 @@ static int run(int argc, char *argv[]) {
+         if (r <= 0)
+                 return r;
+ 
+-        r = dlopen_microhttpd(LOG_ERR);
++        r = DLOPEN_MICROHTTPD(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/journal-remote/journal-remote-main.c b/src/journal-remote/journal-remote-main.c
+index 614ec61be907d..2100190bda035 100644
+--- a/src/journal-remote/journal-remote-main.c
++++ b/src/journal-remote/journal-remote-main.c
+@@ -466,7 +466,7 @@ static int setup_microhttpd_server(RemoteServer *s,
+ #if HAVE_MICROHTTPD
+         int r;
+ 
+-        r = dlopen_microhttpd(LOG_ERR);
++        r = DLOPEN_MICROHTTPD(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/journal-remote/journal-upload.c b/src/journal-remote/journal-upload.c
+index f4b698ae415d6..2eb47d21300d2 100644
+--- a/src/journal-remote/journal-upload.c
++++ b/src/journal-remote/journal-upload.c
+@@ -879,7 +879,7 @@ static int run(int argc, char **argv) {
+         if (r <= 0)
+                 return r;
+ 
+-        r = dlopen_curl(LOG_DEBUG);
++        r = DLOPEN_CURL(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/keyutil/keyutil.c b/src/keyutil/keyutil.c
+index ab8e3eee98233..c54f347079ee4 100644
+--- a/src/keyutil/keyutil.c
++++ b/src/keyutil/keyutil.c
+@@ -233,7 +233,7 @@ static int verb_extract_public(int argc, char *argv[], uintptr_t _data, void *us
+                                 return r;
+                 }
+ 
+-                r = dlopen_libcrypto(LOG_ERR);
++                r = DLOPEN_LIBCRYPTO(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+                 if (r < 0)
+                         return r;
+ 
+diff --git a/src/login/pam_systemd.c b/src/login/pam_systemd.c
+index b6f7ddd38c214..9bdd147db4d08 100644
+--- a/src/login/pam_systemd.c
++++ b/src/login/pam_systemd.c
+@@ -1748,7 +1748,7 @@ _public_ PAM_EXTERN int pam_sm_open_session(
+ 
+         assert(pamh);
+ 
+-        r = dlopen_libpam(LOG_DEBUG);
++        r = DLOPEN_LIBPAM(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return PAM_SERVICE_ERR;
+ 
+@@ -1847,7 +1847,7 @@ _public_ PAM_EXTERN int pam_sm_close_session(
+ 
+         assert(pamh);
+ 
+-        r = dlopen_libpam(LOG_DEBUG);
++        r = DLOPEN_LIBPAM(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return PAM_SERVICE_ERR;
+ 
+diff --git a/src/login/pam_systemd_loadkey.c b/src/login/pam_systemd_loadkey.c
+index 9d44863b02bd1..c93dedf5ea88d 100644
+--- a/src/login/pam_systemd_loadkey.c
++++ b/src/login/pam_systemd_loadkey.c
+@@ -19,7 +19,7 @@ _public_ PAM_EXTERN int pam_sm_authenticate(
+ 
+         assert(pamh);
+ 
+-        r = dlopen_libpam(LOG_DEBUG);
++        r = DLOPEN_LIBPAM(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return PAM_SERVICE_ERR;
+ 
+diff --git a/src/measure/measure-tool.c b/src/measure/measure-tool.c
+index e7a3be6d643b1..70971c11adb74 100644
+--- a/src/measure/measure-tool.c
++++ b/src/measure/measure-tool.c
+@@ -176,7 +176,7 @@ static int parse_argv(int argc, char *argv[], char ***ret_args) {
+                             "Select TPM bank (SHA1, SHA256, SHA384, SHA512)"): {
+                         const EVP_MD *implementation;
+ 
+-                        r = dlopen_libcrypto(LOG_ERR);
++                        r = DLOPEN_LIBCRYPTO(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+                         if (r < 0)
+                                 return r;
+ 
+@@ -1122,7 +1122,7 @@ static int run(int argc, char *argv[]) {
+         if (r <= 0)
+                 return r;
+ 
+-        r = dlopen_libcrypto(LOG_ERR);
++        r = DLOPEN_LIBCRYPTO(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/network/networkd-sysctl.c b/src/network/networkd-sysctl.c
+index c59cb2a5d708c..ab4c03609a2bf 100644
+--- a/src/network/networkd-sysctl.c
++++ b/src/network/networkd-sysctl.c
+@@ -108,7 +108,7 @@ int manager_install_sysctl_monitor(Manager *manager) {
+ 
+         assert(manager);
+ 
+-        r = dlopen_bpf(LOG_DEBUG);
++        r = DLOPEN_BPF(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (ERRNO_IS_NEG_NOT_SUPPORTED(r))
+                 return log_debug_errno(r, "sysctl monitor disabled, as BPF support is not available.");
+         if (r < 0)
+diff --git a/src/nspawn/nspawn-oci.c b/src/nspawn/nspawn-oci.c
+index bd28a67e6b14c..0f206bd7067c6 100644
+--- a/src/nspawn/nspawn-oci.c
++++ b/src/nspawn/nspawn-oci.c
+@@ -1826,7 +1826,7 @@ static int oci_seccomp(const char *name, sd_json_variant *v, sd_json_dispatch_fl
+         if (r < 0)
+                 return json_log(def, flags, r, "Unknown default action: %s", sd_json_variant_string(def));
+ 
+-        r = dlopen_libseccomp(LOG_DEBUG);
++        r = DLOPEN_LIBSECCOMP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return json_log(def, flags, r, "No support for libseccomp: %m");
+ 
+diff --git a/src/nspawn/nspawn.c b/src/nspawn/nspawn.c
+index cb78f1ccfb314..bbd5f411d413c 100644
+--- a/src/nspawn/nspawn.c
++++ b/src/nspawn/nspawn.c
+@@ -6146,9 +6146,9 @@ static int run(int argc, char *argv[]) {
+         if (arg_cleanup)
+                 return do_cleanup();
+ 
+-        (void) dlopen_libmount(LOG_DEBUG);
+-        (void) dlopen_libseccomp(LOG_DEBUG);
+-        (void) dlopen_libselinux(LOG_DEBUG);
++        (void) DLOPEN_LIBMOUNT(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
++        (void) DLOPEN_LIBSECCOMP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
++        (void) DLOPEN_LIBSELINUX(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+ 
+         r = cg_has_legacy();
+         if (r < 0)
+diff --git a/src/nsresourced/userns-restrict.c b/src/nsresourced/userns-restrict.c
+index bc7bac6942df6..1b82c797f09ee 100644
+--- a/src/nsresourced/userns-restrict.c
++++ b/src/nsresourced/userns-restrict.c
+@@ -68,7 +68,7 @@ int userns_restrict_install(
+         if (r == 0)
+                 return log_error_errno(SYNTHETIC_ERRNO(EOPNOTSUPP), "bpf-lsm not supported, can't lock down user namespace.");
+ 
+-        r = dlopen_bpf(LOG_DEBUG);
++        r = DLOPEN_BPF(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/pcrextend/pcrextend.c b/src/pcrextend/pcrextend.c
+index ac432aaac579b..d5d4a23d51a77 100644
+--- a/src/pcrextend/pcrextend.c
++++ b/src/pcrextend/pcrextend.c
+@@ -90,7 +90,7 @@ static int parse_argv(int argc, char *argv[], char ***ret_args) {
+                 OPTION_LONG("bank", "DIGEST", "Select TPM PCR bank (SHA1, SHA256)"): {
+                         const EVP_MD *implementation;
+ 
+-                        r = dlopen_libcrypto(LOG_ERR);
++                        r = DLOPEN_LIBCRYPTO(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+                         if (r < 0)
+                                 return r;
+ 
+diff --git a/src/pcrlock/pcrlock.c b/src/pcrlock/pcrlock.c
+index 247c36cca15c9..5aba4e966bb83 100644
+--- a/src/pcrlock/pcrlock.c
++++ b/src/pcrlock/pcrlock.c
+@@ -5481,7 +5481,7 @@ static int run(int argc, char *argv[]) {
+         if (r <= 0)
+                 return r;
+ 
+-        r = dlopen_libcrypto(LOG_ERR);
++        r = DLOPEN_LIBCRYPTO(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/portable/portable.c b/src/portable/portable.c
+index f9f47f2e0fd89..a98c1162d95e7 100644
+--- a/src/portable/portable.c
++++ b/src/portable/portable.c
+@@ -610,8 +610,8 @@ static int portable_extract_by_path(
+                  * there, and extract the metadata we need. The metadata is sent from the child back to us. */
+ 
+                 /* Load some libraries before we fork workers off that want to use them */
+-                (void) dlopen_cryptsetup(LOG_DEBUG);
+-                (void) dlopen_libmount(LOG_DEBUG);
++                (void) DLOPEN_CRYPTSETUP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
++                (void) DLOPEN_LIBMOUNT(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+ 
+                 r = mkdtemp_malloc("/tmp/inspect-XXXXXX", &tmpdir);
+                 if (r < 0)
+diff --git a/src/repart/repart.c b/src/repart/repart.c
+index a9d6d8efec95c..53204e94db92e 100644
+--- a/src/repart/repart.c
++++ b/src/repart/repart.c
+@@ -3101,7 +3101,7 @@ static int partition_read_definition(
+                                   "Cannot format %s filesystem without source files, refusing.", p->format);
+ 
+         if (p->verity != VERITY_OFF || p->encrypt != ENCRYPT_OFF) {
+-                r = dlopen_cryptsetup(LOG_DEBUG);
++                r = DLOPEN_CRYPTSETUP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+                 if (r < 0)
+                         return log_syntax(NULL, LOG_ERR, path, 1, r,
+                                           "libcryptsetup not found, Verity=/Encrypt= are not supported: %m");
+@@ -4708,7 +4708,7 @@ static int context_wipe_range(Context *context, uint64_t offset, uint64_t size)
+         assert(offset != UINT64_MAX);
+         assert(size != UINT64_MAX);
+ 
+-        r = dlopen_libblkid(LOG_ERR);
++        r = DLOPEN_LIBBLKID(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+@@ -5400,7 +5400,7 @@ static int partition_encrypt(Context *context, Partition *p, PartitionTarget *ta
+         assert(p);
+         assert(p->encrypt != ENCRYPT_OFF);
+ 
+-        r = dlopen_cryptsetup(LOG_ERR);
++        r = DLOPEN_CRYPTSETUP(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+@@ -5939,7 +5939,7 @@ static int partition_format_verity_hash(
+ 
+         (void) partition_hint(p, node, &hint);
+ 
+-        r = dlopen_cryptsetup(LOG_ERR);
++        r = DLOPEN_CRYPTSETUP(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+@@ -6041,7 +6041,7 @@ static int sign_verity_roothash(
+         assert(iovec_is_set(roothash));
+         assert(ret_signature);
+ 
+-        r = dlopen_libcrypto(LOG_ERR);
++        r = DLOPEN_LIBCRYPTO(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+@@ -7128,7 +7128,7 @@ static int partition_populate_filesystem(Context *context, Partition *p, const c
+          * appear in the host namespace. Hence we fork a child that has its own file system namespace and
+          * detached mount propagation. */
+ 
+-        (void) dlopen_libmount(LOG_DEBUG);
++        (void) DLOPEN_LIBMOUNT(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+ 
+         r = pidref_safe_fork(
+                         "(sd-copy)",
+@@ -8720,7 +8720,7 @@ static int resolve_copy_blocks_auto_candidate(
+                 return log_error_errno(r, "Failed to open block device " DEVNUM_FORMAT_STR ": %m",
+                                        DEVNUM_FORMAT_VAL(whole_devno));
+ 
+-        r = dlopen_libblkid(LOG_ERR);
++        r = DLOPEN_LIBBLKID(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+@@ -11543,7 +11543,7 @@ static int run(int argc, char *argv[]) {
+         if (r <= 0)
+                 return r;
+ 
+-        r = dlopen_fdisk(LOG_ERR);
++        r = DLOPEN_FDISK(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/report/report-upload.c b/src/report/report-upload.c
+index 471bcb760600e..aea12e62a5335 100644
+--- a/src/report/report-upload.c
++++ b/src/report/report-upload.c
+@@ -81,7 +81,7 @@ static int http_upload_collected(Context *context, sd_json_variant *report) {
+         _cleanup_free_ char *json = NULL;
+         int r;
+ 
+-        r = dlopen_curl(LOG_DEBUG);
++        r = DLOPEN_CURL(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/resolve/resolved-dns-dnssec.c b/src/resolve/resolved-dns-dnssec.c
+index f33bba28ff194..9112369a74c39 100644
+--- a/src/resolve/resolved-dns-dnssec.c
++++ b/src/resolve/resolved-dns-dnssec.c
+@@ -709,7 +709,7 @@ int dnssec_verify_rrset(
+         assert(dnskey);
+         assert(result);
+ 
+-        r = dlopen_libcrypto(LOG_DEBUG);
++        r = DLOPEN_LIBCRYPTO(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+@@ -1066,7 +1066,7 @@ int dnssec_verify_dnskey_by_ds(DnsResourceRecord *dnskey, DnsResourceRecord *ds,
+         assert(dnskey);
+         assert(ds);
+ 
+-        r = dlopen_libcrypto(LOG_DEBUG);
++        r = DLOPEN_LIBCRYPTO(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+@@ -1206,7 +1206,7 @@ int dnssec_nsec3_hash(DnsResourceRecord *nsec3, const char *name, void *ret) {
+         assert(name);
+         assert(ret);
+ 
+-        r = dlopen_libcrypto(LOG_DEBUG);
++        r = DLOPEN_LIBCRYPTO(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/resolve/resolved-dnstls.c b/src/resolve/resolved-dnstls.c
+index f59c2fa348f67..e7191f2e7f4ec 100644
+--- a/src/resolve/resolved-dnstls.c
++++ b/src/resolve/resolved-dnstls.c
+@@ -397,11 +397,11 @@ int dnstls_manager_init(Manager *manager) {
+ 
+         assert(manager);
+ 
+-        r = dlopen_libcrypto(LOG_WARNING);
++        r = DLOPEN_LIBCRYPTO(LOG_WARNING, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+-        r = dlopen_libssl(LOG_WARNING);
++        r = DLOPEN_LIBSSL(LOG_WARNING, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/resolve/resolved-util.c b/src/resolve/resolved-util.c
+index 094ef00698513..7b591ebbb9068 100644
+--- a/src/resolve/resolved-util.c
++++ b/src/resolve/resolved-util.c
+@@ -36,7 +36,7 @@ int resolve_system_hostname(char **full_hostname, char **first_label) {
+ #if HAVE_LIBIDN2
+         _cleanup_free_ char *utf8 = NULL;
+ 
+-        if (dlopen_idn(LOG_DEBUG) >= 0) {
++        if (DLOPEN_IDN(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED) >= 0) {
+                 r = sym_idn2_to_unicode_8z8z(label, &utf8, 0);
+                 if (r != IDN2_OK)
+                         return log_debug_errno(SYNTHETIC_ERRNO(EUCLEAN),
+diff --git a/src/sbsign/sbsign.c b/src/sbsign/sbsign.c
+index 1d690220d1b51..cad7cc54db02e 100644
+--- a/src/sbsign/sbsign.c
++++ b/src/sbsign/sbsign.c
+@@ -425,7 +425,7 @@ static int verb_sign(int argc, char *argv[], uintptr_t _data, void *userdata) {
+         _cleanup_(iovec_done) struct iovec signed_attributes_signature = {};
+         int r;
+ 
+-        r = dlopen_libcrypto(LOG_ERR);
++        r = DLOPEN_LIBCRYPTO(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/shutdown/detach-swap.c b/src/shutdown/detach-swap.c
+index 04efbfeb36d54..585a2f85a680d 100644
+--- a/src/shutdown/detach-swap.c
++++ b/src/shutdown/detach-swap.c
+@@ -36,7 +36,7 @@ int swap_list_get(const char *swaps, SwapDevice **head) {
+ 
+         assert(head);
+ 
+-        r = dlopen_libmount(LOG_ERR);
++        r = DLOPEN_LIBMOUNT(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/sysext/sysext.c b/src/sysext/sysext.c
+index a3b1ba6221b66..ce2468fafdac0 100644
+--- a/src/sysext/sysext.c
++++ b/src/sysext/sysext.c
+@@ -1676,7 +1676,7 @@ static int unmerge(
+         bool need_to_reload;
+         int r;
+ 
+-        (void) dlopen_libmount(LOG_DEBUG);
++        (void) DLOPEN_LIBMOUNT(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+ 
+         r = need_reload(image_class, hierarchies, no_reload);
+         if (r < 0)
+@@ -2257,9 +2257,9 @@ static int merge(ImageClass image_class,
+ 
+         int r;
+ 
+-        (void) dlopen_cryptsetup(LOG_DEBUG);
+-        (void) dlopen_libblkid(LOG_DEBUG);
+-        (void) dlopen_libmount(LOG_DEBUG);
++        (void) DLOPEN_CRYPTSETUP(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
++        (void) DLOPEN_LIBBLKID(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
++        (void) DLOPEN_LIBMOUNT(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+ 
+         _cleanup_(pidref_done) PidRef pidref = PIDREF_NULL;
+         r = pidref_safe_fork("(sd-merge)", FORK_DEATHSIG_SIGTERM|FORK_LOG|FORK_NEW_MOUNTNS, &pidref);
+diff --git a/src/sysupdate/sysupdate-partition.c b/src/sysupdate/sysupdate-partition.c
+index 0b346da62d18d..6361093231dcb 100644
+--- a/src/sysupdate/sysupdate-partition.c
++++ b/src/sysupdate/sysupdate-partition.c
+@@ -161,7 +161,7 @@ int find_suitable_partition(
+         POINTER_MAY_BE_NULL(partition_type);
+         assert(ret);
+ 
+-        r = dlopen_fdisk(LOG_DEBUG);
++        r = DLOPEN_FDISK(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+@@ -230,7 +230,7 @@ int patch_partition(
+         if (change == 0) /* Nothing to do */
+                 return 0;
+ 
+-        r = dlopen_fdisk(LOG_DEBUG);
++        r = DLOPEN_FDISK(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/sysupdate/sysupdate-resource.c b/src/sysupdate/sysupdate-resource.c
+index a91741a49f10f..e234b3c914808 100644
+--- a/src/sysupdate/sysupdate-resource.c
++++ b/src/sysupdate/sysupdate-resource.c
+@@ -234,7 +234,7 @@ static int resource_load_from_blockdev(Resource *rr) {
+ 
+         assert(rr);
+ 
+-        r = dlopen_fdisk(LOG_DEBUG);
++        r = DLOPEN_FDISK(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/test/test-bpf-restrict-fsaccess.c b/src/test/test-bpf-restrict-fsaccess.c
+index 0d4e18671aa3e..80d448815cf00 100644
+--- a/src/test/test-bpf-restrict-fsaccess.c
++++ b/src/test/test-bpf-restrict-fsaccess.c
+@@ -107,7 +107,7 @@ static int do_attach(void) {
+         struct stat st;
+         int r;
+ 
+-        r = dlopen_bpf(LOG_ERR);
++        r = DLOPEN_BPF(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return log_error_errno(r, "Failed to dlopen libbpf: %m");
+ 
+diff --git a/src/test/test-bpf-token.c b/src/test/test-bpf-token.c
+index f991f92601271..f7156f7ff537a 100644
+--- a/src/test/test-bpf-token.c
++++ b/src/test/test-bpf-token.c
+@@ -11,7 +11,7 @@ static int run(int argc, char *argv[]) {
+ #if HAVE_LIBBPF
+         int r;
+ 
+-        r = dlopen_bpf(LOG_ERR);
++        r = DLOPEN_BPF(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/tmpfiles/tmpfiles.c b/src/tmpfiles/tmpfiles.c
+index fa2b21f73a0f0..2c7ac18109578 100644
+--- a/src/tmpfiles/tmpfiles.c
++++ b/src/tmpfiles/tmpfiles.c
+@@ -1267,7 +1267,7 @@ static int parse_acl_cond_exec(
+         assert(cond_exec);
+         assert(ret);
+ 
+-        r = dlopen_libacl(LOG_DEBUG);
++        r = DLOPEN_LIBACL(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+@@ -1386,7 +1386,7 @@ static int path_set_acl(
+ 
+         assert(c);
+ 
+-        r = dlopen_libacl(LOG_DEBUG);
++        r = DLOPEN_LIBACL(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/tpm2-setup/tpm2-setup.c b/src/tpm2-setup/tpm2-setup.c
+index eb25d7fd7f54e..ab0966f8d92dc 100644
+--- a/src/tpm2-setup/tpm2-setup.c
++++ b/src/tpm2-setup/tpm2-setup.c
+@@ -569,7 +569,7 @@ static int run(int argc, char *argv[]) {
+                 return EXIT_SUCCESS;
+         }
+ 
+-        r = dlopen_libcrypto(LOG_ERR);
++        r = DLOPEN_LIBCRYPTO(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/udev/udev-builtin-blkid.c b/src/udev/udev-builtin-blkid.c
+index 4cd22a889fcf7..57fa7f9585d6d 100644
+--- a/src/udev/udev-builtin-blkid.c
++++ b/src/udev/udev-builtin-blkid.c
+@@ -506,7 +506,7 @@ static int builtin_blkid(UdevEvent *event, int argc, char *argv[]) {
+         int64_t offset = 0;
+         int r;
+ 
+-        r = dlopen_libblkid(LOG_DEBUG);
++        r = DLOPEN_LIBBLKID(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return log_device_debug_errno(dev, r, "blkid not available: %m");
+ 
+diff --git a/src/udev/udevd.c b/src/udev/udevd.c
+index 593eee89b8bde..4cbc481c7681d 100644
+--- a/src/udev/udevd.c
++++ b/src/udev/udevd.c
+@@ -58,11 +58,11 @@ int run_udevd(int argc, char *argv[]) {
+                 return log_error_errno(r, "Failed to create /run/udev: %m");
+ 
+         /* Load some shared libraries before we fork any workers */
+-        (void) dlopen_libacl(LOG_DEBUG);
+-        (void) dlopen_libblkid(LOG_DEBUG);
+-        (void) dlopen_libkmod(LOG_DEBUG);
+-        (void) dlopen_libmount(LOG_DEBUG);
+-        (void) dlopen_tpm2(LOG_DEBUG);
++        (void) DLOPEN_LIBACL(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
++        (void) DLOPEN_LIBBLKID(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
++        (void) DLOPEN_LIBKMOD(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
++        (void) DLOPEN_LIBMOUNT(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
++        (void) DLOPEN_TPM2(LOG_DEBUG, SD_ELF_NOTE_DLOPEN_PRIORITY_RECOMMENDED);
+ 
+         if (arg_daemonize) {
+                 pid_t pid;
+diff --git a/src/validatefs/validatefs.c b/src/validatefs/validatefs.c
+index 506b8198709d5..994fcbeb13d03 100644
+--- a/src/validatefs/validatefs.c
++++ b/src/validatefs/validatefs.c
+@@ -290,7 +290,7 @@ static int validate_gpt_metadata_one(sd_device *d, const char *path, const Valid
+         assert(d);
+         assert(f);
+ 
+-        r = dlopen_libblkid(LOG_ERR);
++        r = DLOPEN_LIBBLKID(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
+diff --git a/src/veritysetup/veritysetup.c b/src/veritysetup/veritysetup.c
+index e9ce2bdfecb69..42e5356b11524 100644
+--- a/src/veritysetup/veritysetup.c
++++ b/src/veritysetup/veritysetup.c
+@@ -491,7 +491,7 @@ static int run(int argc, char *argv[]) {
+ 
+         log_setup();
+ 
+-        r = dlopen_cryptsetup(LOG_ERR);
++        r = DLOPEN_CRYPTSETUP(LOG_ERR, SD_ELF_NOTE_DLOPEN_PRIORITY_REQUIRED);
+         if (r < 0)
+                 return r;
+ 
