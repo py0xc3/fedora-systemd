@@ -126,10 +126,13 @@ Source25:       98-default-mac-none.link
 
 Source26:       systemd-user
 
-%if 0%{?fedora} < 40 && 0%{?rhel} < 10
+%if 0%{?build_pass} == 0 || (0%{?fedora} < 40 && 0%{?rhel} < 10)
 # Work-around for dracut issue: run generators directly when we are in initrd
 # https://bugzilla.redhat.com/show_bug.cgi?id=2164404
 # Drop when dracut-060 is available.
+#
+# %%build_pass==0 is true in the srpm phase. We want to include the
+# in the srpm so that the same srpm can be used for all builds.
 Patch:          https://github.com/systemd/systemd/pull/26494.patch
 %endif
 
@@ -751,6 +754,7 @@ main systemd package and is meant for use in exitrds.
 # Print varius with's and without's to make it easier to figure out what is going on
 echo %{shrink:
        '**'
+       build_pass=%{?build_pass}
        bzip2=%{?with_bzip2}%{!?with_bzip2:0}
        gnutls=%{?with_gnutls}%{!?with_gnutls:0}
        lz4=%{?with_lz4}%{!?with_lz4:0}
